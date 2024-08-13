@@ -7,6 +7,9 @@ import fiftyone.zoo.models as fozm
 import fiftyone.core.patches as fop
 from fiftyone import ViewField as F
 import fiftyone.core.fields as fof
+import numpy as np
+import fiftyone.core.labels as fol
+
 
 
 class EvaluationPanel(foo.Panel):
@@ -282,8 +285,498 @@ class EvaluationPanel(foo.Panel):
                 mAP_list.append(new_row)
                 ctx.panel.set_state("my_stack.mAP_evaluations", mAP_list) 
 
+class EvalPlots(foo.Panel):
+
+    @property
+    def config(self):
+        return foo.PanelOperatorConfig(
+            name="eval_plots",
+            label="eval_plots"
+        )
+    
+    # def on_change_view(self, ctx):
+    #     print("View changed")
+    
+    def on_load(self, ctx):
+
+        eval_key = "best_test"
+        info = ctx.dataset.get_evaluation_info(eval_key).serialize()
+        results = ctx.dataset.load_evaluation_results(eval_key)
+        pred_field = info["config"]["pred_field"]
+        gt_field = info["config"]["gt_field"]
+        classes = ctx.dataset.distinct(f"{pred_field}.detections.label")
+
+        x = f"{pred_field}.detections.confidence"
+        bins = 10
+        counts, edges, other = ctx.view.histogram_values(
+            x,
+            bins=bins,
+        )
+        counts = np.asarray(counts)
+        edges = np.asarray(edges)
+        
+        left_edges = edges[:-1]
+        widths = edges[1:] - edges[:-1]
+        histogram_data = {
+            "name": f"{pred_field}.detections.confidence",
+            'x': left_edges.tolist(),
+            'y': counts.tolist(),
+            'type': 'bar',
+            'width': widths.tolist()
+        }
+        ctx.panel.data.confidence = [
+            # trace
+            histogram_data,
+        ]
+
+        x = f"{pred_field}.detections.{eval_key}_iou"
+        bins = 10
+        counts, edges, other = ctx.view.histogram_values(
+            x,
+            bins=bins,
+        )
+        counts = np.asarray(counts)
+        edges = np.asarray(edges)
+        
+        left_edges = edges[:-1]
+        widths = edges[1:] - edges[:-1]
+        histogram_data = {
+            "name": f"{pred_field}.detections.{eval_key}_iou",
+            'x': left_edges.tolist(),
+            'y': counts.tolist(),
+            'type': 'bar',
+            'width': widths.tolist()
+        }
+        ctx.panel.data.iou = [
+            # trace
+            histogram_data,
+        ]
+
+        tp = np.array(ctx.dataset.values(f"{eval_key}_tp"))
+        fp = np.array(ctx.dataset.values(f"{eval_key}_fp"))
+        fn = np.array(ctx.dataset.values(f"{eval_key}_fn"))
+
+        p = tp / (tp + fp)
+        p = np.nan_to_num(p, nan=0.0)
+        r = tp / (tp + fn)
+        r = np.nan_to_num(r, nan=0.0)
+        f1 = 2 * (p * r) / (p + r)
+        f1 = np.nan_to_num(f1, nan=0.0)
+
+        p_left_edges, p_counts, p_widths = compute_histogram(p,10)
+
+        histogram_data = {
+            "name": f"{pred_field}.detections.{eval_key}",
+            'x': p_left_edges.tolist(),
+            'y': p_counts.tolist(),
+            'type': 'bar',
+            'width': p_widths.tolist()
+        }
+        ctx.panel.data.precision = [
+            # trace
+            histogram_data,
+        ]
+
+        r_left_edges, r_counts, r_widths = compute_histogram(r,10)
+
+        histogram_data = {
+            "name": f"{pred_field}.detections.{eval_key}",
+            'x': r_left_edges.tolist(),
+            'y': r_counts.tolist(),
+            'type': 'bar',
+            'width': r_widths.tolist()
+        }
+        ctx.panel.data.recall = [
+            # trace
+            histogram_data,
+        ]
+
+        f1_left_edges, f1_counts, f1_widths = compute_histogram(f1,10)
+
+        histogram_data = {
+            "name": f"{pred_field}.detections.{eval_key}",
+            'x': f1_left_edges.tolist(),
+            'y': f1_counts.tolist(),
+            'type': 'bar',
+            'width': f1_widths.tolist()
+        }
+        ctx.panel.data.f1 = [
+            # trace
+            histogram_data,
+        ]
+
+
+        confusion_matrix, labels, ids = results._confusion_matrix()
+        confusion_matrix = np.asarray(confusion_matrix)
+        ids = np.asarray(ids)
+        num_rows, num_cols = confusion_matrix.shape
+        zlim = [0, confusion_matrix.max()]
+        eval_info = ctx.dataset.get_evaluation_info(eval_key)
+        gt_field = eval_info.config.gt_field
+        pred_field = eval_info.config.pred_field
+        label_type = ctx.dataset._get_label_field_type(gt_field)
+        use_patches = issubclass(label_type, (fol.Detections, fol.Polylines))
+        label_fields = [gt_field, pred_field]
+        xlabels = labels[:num_cols]
+        ylabels = labels[:num_rows]
+
+        # Flip data so plot will have the standard descending diagonal
+        # Flipping the yaxis via `autorange="reversed"` isn't an option because
+        # screenshots don't seem to respect that setting...
+
+
+        if use_patches:
+            selection_mode = "patches"
+            init_fcn = lambda view: view.to_evaluation_patches(eval_key)
+        else:
+            selection_mode = "select"
+            init_fcn = None
+
+        cm_data = {
+            'z': confusion_matrix,
+            'x': labels,
+            'y': labels,
+            'type': 'heatmap',
+        }
+        ctx.panel.data.cm = [
+            # trace
+            cm_data,
+        ]
+
+
+        p_class_list = []
+        r_class_list = []
+        f1_class_list = []
+        for cls in classes:
+
+            tp = sum(sublist.count("tp") for sublist in ctx.dataset.filter_labels(pred_field, F("label").is_in([cls])).values(f"{pred_field}.detections.{eval_key}"))
+            fp = sum(sublist.count("fp") for sublist in ctx.dataset.filter_labels(pred_field, F("label").is_in([cls])).values(f"{pred_field}.detections.{eval_key}"))
+            fn = sum(sublist.count("fn") for sublist in ctx.dataset.filter_labels(gt_field, F("label").is_in([cls])).values(f"{gt_field}.detections.{eval_key}"))
+
+
+            p = tp / (tp + fp)
+            p = np.nan_to_num(p, nan=0.0)
+            r = tp / (tp + fn)
+            r = np.nan_to_num(r, nan=0.0)
+            f1 = 2 * (p * r) / (p + r)
+            f1 = np.nan_to_num(f1, nan=0.0)
+        
+            p_class_list.append(p)
+            r_class_list.append(r)
+            f1_class_list.append(f1)
+        
+        histogram_data = {
+            "name": f"{pred_field}.detections.{eval_key}",
+            'x': classes,
+            'y': p_class_list,
+            'type': 'bar',
+        }
+        ctx.panel.data.p_class = [
+            # trace
+            histogram_data,
+        ]
+
+        histogram_data = {
+            "name": f"{pred_field}.detections.{eval_key}",
+            'x': classes,
+            'y': r_class_list,
+            'type': 'bar',
+        }
+        ctx.panel.data.r_class = [
+            # trace
+            histogram_data,
+        ]
+
+        histogram_data = {
+            "name": f"{pred_field}.detections.{eval_key}",
+            'x': classes,
+            'y': f1_class_list,
+            'type': 'bar',
+        }
+        ctx.panel.data.f1_class = [
+            # trace
+            histogram_data,
+        ]
+
+        print("Panel loaded")
+
+
+    
+    def render(self, ctx):
+        panel = types.Object()
+        # Define main stack
+        stack = panel.v_stack("my_stack", align_x="center", gap=2)
+
+        stack.md("""
+            ### Evaluate Plots
+        """,
+        name="md1")
+
+        # Create the eval key options for the menus
+        eval_keys = types.Choices()
+        for key in ctx.dataset.list_evaluations():
+            eval_keys.add_choice(key, label=key)
+
+        menu = stack.menu('menu', variant="square", width=100, align_y="center")
+        actions = menu.btn_group('actions')
+
+        # Add Eval Key Menu
+        actions.enum('eval_key', label="Evaluation key", values=eval_keys.values(),  view=types.View(space=3), on_change=self.on_change_config,)
+
+        compare_keys = eval_keys.values()
+
+        # Check to see if state initialized the stack
+        if ctx.panel.get_state("my_stack") != None:
+            eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+            if eval_key != None:
+
+                # Remove active eval key from the compare list
+                compare_keys = eval_keys.values()
+                index = compare_keys.index(eval_key )
+                compare_keys.pop(index)
+
+                # Find the type of eval
+                current_eval = ctx.dataset.get_evaluation_info(eval_key)
+                eval_type = current_eval.config.type
 
             
+        # Add Compare Key menu
+        actions.enum('compare_key', label="Compare key", values=compare_keys,  view=types.View(space=3), on_change=self.on_change_config,)
+
+        config = {
+            "scrollZoom": False
+        }
+        layout = {
+            "title": "Confidence",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {
+                "title": "Confidence"
+            },
+            "yaxis": {
+                "title": "Count"
+            },
+            "showlegend": True,
+            "legend": {
+                "x": 0,
+                "y": 1,
+                "showlegend": True
+            }
+        }
+        panel.add_property('confidence', types.Property(
+            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
+        ))
+
+        config = {
+            "scrollZoom": False
+        }
+        layout = {
+            "title": "IOU",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {
+                "title": "IOU"
+            },
+            "yaxis": {
+                "title": "Count"
+            },
+            "showlegend": True,
+            "legend": {
+                "x": 0,
+                "y": 1,
+                "showlegend": True
+            }
+        }
+        panel.add_property('iou', types.Property(
+            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
+        ))
+
+        config = {
+            "scrollZoom": False
+        }
+        layout = {
+            "title": "Precision Distribution",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {
+                "title": "Precision per Sample"
+            },
+            "yaxis": {
+                "title": "Count"
+            },
+            "showlegend": True,
+            "legend": {
+                "x": 0,
+                "y": 1,
+                "showlegend": True
+            }
+        }
+        panel.add_property('precision', types.Property(
+            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
+        ))
+
+       
+        config = {
+            "scrollZoom": False
+        }
+        layout = {
+            "title": "Recall Distribution",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {
+                "title": "Recall per Sample"
+            },
+            "yaxis": {
+                "title": "Count"
+            },
+            "showlegend": True,
+            "legend": {
+                "x": 0,
+                "y": 1,
+                "showlegend": True
+            }
+        }
+        panel.add_property('recall', types.Property(
+            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
+        ))
+
+        config = {
+            "scrollZoom": False
+        }
+        layout = {
+            "title": "F1-Score Distribution",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {
+                "title": "F1-Score per Sample"
+            },
+            "yaxis": {
+                "title": "Count"
+            },
+            "showlegend": True,
+            "legend": {
+                "x": 0,
+                "y": 1,
+                "showlegend": True
+            }
+        }
+        panel.add_property('f1', types.Property(
+            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
+        ))
+
+        config = {
+            "scrollZoom": False
+        }
+        layout = {
+            "title": "Precision per Class",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {
+                "title": "Precision per Class"
+            },
+            "yaxis": {
+                "title": "Precision"
+            },
+            "showlegend": True,
+            "legend": {
+                "x": 0,
+                "y": 1,
+                "showlegend": True
+            }
+        }
+        panel.add_property('p_class', types.Property(
+            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_categorical_click)
+        ))
+
+        config = {
+            "scrollZoom": False
+        }
+        layout = {
+            "title": "Recall per Class",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {
+                "title": "Recall per Class"
+            },
+            "yaxis": {
+                "title": "Recall"
+            },
+            "showlegend": True,
+            "legend": {
+                "x": 0,
+                "y": 1,
+                "showlegend": True
+            }
+        }
+        panel.add_property('r_class', types.Property(
+            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_categorical_click)
+        ))
+
+        config = {
+            "scrollZoom": False
+        }
+        layout = {
+            "title": "F1-Score per Class",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {
+                "title": "F1-Score per Class"
+            },
+            "yaxis": {
+                "title": "F1-Score"
+            },
+            "showlegend": True,
+            "legend": {
+                "x": 0,
+                "y": 1,
+                "showlegend": True
+            }
+        }
+        panel.add_property('f1_class', types.Property(
+            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_categorical_click)
+        ))
+
+        config = {}
+        layout = {
+                    "title": "Confusion Matrix",
+                    "xaxis": {"fixedrange": True, "title": "Ground truth"},
+                    "yaxis": {"fixedrange": True, "title": "Model predictions"},
+                }
+        
+        panel.add_property('cm', types.Property(
+            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout,)
+        ))
+
+        return types.Property(
+            panel,
+            view=types.GridView(
+                height=100,
+                width=100,
+                align_x="center",
+                align_y="center",
+                componentsProps={"container": {"sx": {"position": "relative"}}},
+            ),
+        )
+
+    def on_change_config(self, ctx):
+        eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+        current_eval = ctx.dataset.get_evaluation_info(eval_key).serialize()
+        eval_type = current_eval["config"]["type"]
+        results = ctx.dataset.load_evaluation_results(eval_key)
+        report = results.report()
+        table_list = []
+
+    def on_numerical_click(self,ctx):
+        params = ctx.params.get("data")
+        x = params["x"]
+        name = params["name"]
+        view = ctx.dataset.match(name < x)
+        ctx.ops.set_view(view)
+
+
+    def on_categorical_click(self,ctx):
+        pass
+        
 
 def _eval_results(ctx, stack, current_eval):
 
@@ -397,647 +890,18 @@ def _eval_info(ctx, stack, current_eval):
             view=types.SwitchView(),
         )
 
-
-class EvaluationMethod(object):
-    def __init__(self, eval_type, method):
-        self.eval_type = eval_type
-        self.method = method
-
-    def get_parameters(self, ctx, inputs):
-        pass
-
-    def parse_parameters(self, ctx, params):
-        pass
-
-
-class Regression(EvaluationMethod):
-    def get_parameters(self, ctx, inputs):
-        inputs.float(
-            "missing",
-            label="Missing",
-            description=(
-                "A missing value. Any None-valued regressions are given this "
-                "value for results purposes"
-            ),
-        )
-
-
-class SimpleRegression(Regression):
-    def get_parameters(self, ctx, inputs):
-        inputs.view(
-            "parameters",
-            types.Header(
-                label="Simple regression evaluation",
-                description="https://docs.voxel51.com/user_guide/evaluation.html#simple-evaluation-default",
-                divider=True,
-            ),
-        )
-
-        super().get_parameters(ctx, inputs)
-
-        metric_choices = types.DropdownView()
-        metric_choices.add_choice("squared_error", label="squared error")
-        metric_choices.add_choice("absolute_error", label="absolute error")
-
-        inputs.enum(
-            "metric",
-            metric_choices.values(),
-            required=True,
-            label="Metric",
-            description=(
-                "The error metric to use to populate sample/frame-level error "
-                "data"
-            ),
-            view=metric_choices,
-        )
-
-
-class Classification(EvaluationMethod):
-    def get_parameters(self, ctx, inputs):
-        _get_classes(ctx, inputs)
-
-        inputs.float(
-            "missing",
-            label="Missing",
-            description=(
-                "A missing label string. Any None-valued labels are given "
-                "this label for results purposes"
-            ),
-        )
-
-    def parse_parameters(self, ctx, params):
-        classes = params.pop("classes", None)
-        if classes is not None:
-            params["classes"] = _parse_classes(ctx, classes)
-
-
-class SimpleClassification(Classification):
-    def get_parameters(self, ctx, inputs):
-        inputs.view(
-            "parameters",
-            types.Header(
-                label="Simple classification evaluation",
-                description="https://docs.voxel51.com/user_guide/evaluation.html#id4",
-                divider=True,
-            ),
-        )
-
-        super().get_parameters(ctx, inputs)
-
-
-class TopKClassification(Classification):
-    def get_parameters(self, ctx, inputs):
-        inputs.view(
-            "parameters",
-            types.Header(
-                label="Top-k classification evaluation",
-                description="https://docs.voxel51.com/user_guide/evaluation.html#top-k-evaluation",
-                divider=True,
-            ),
-        )
-
-        super().get_parameters(ctx, inputs)
-
-        inputs.int(
-            "k",
-            label="k",
-            description="The top-k value to use when assessing accuracy",
-        )
-
-
-class BinaryClassification(Classification):
-    def get_parameters(self, ctx, inputs):
-        inputs.view(
-            "parameters",
-            types.Header(
-                label="Binary classification evaluation",
-                description="https://docs.voxel51.com/user_guide/evaluation.html#binary-evaluation",
-                divider=True,
-            ),
-        )
-
-        super().get_parameters(ctx, inputs)
-
-
-class Detection(EvaluationMethod):
-    def get_parameters(self, ctx, inputs):
-        _get_classes(ctx, inputs)
-
-        pred_field = ctx.params["pred_field"]
-        label_type, _, _ = _get_evaluation_type(ctx.dataset, pred_field)
-
-        inputs.float(
-            "missing",
-            label="Missing",
-            description=(
-                "A missing label string. Any unmatched objects are given this "
-                "label for results purposes"
-            ),
-        )
-
-        inputs.float(
-            "iou",
-            default=0.5,
-            required=True,
-            label="IOU",
-            description=(
-                "The intersection-over-union (IoU) threshold to use to "
-                "determine matches"
-            ),
-        )
-
-        if issubclass(label_type, fo.Detections):
-            inputs.bool(
-                "use_masks",
-                default=False,
-                label="Use masks",
-                description=(
-                    "Whether to compute IoUs using the instances masks of the "
-                    "provided objects"
-                ),
-            )
-
-        if issubclass(label_type, fo.Polylines):
-            inputs.bool(
-                "use_boxes",
-                default=False,
-                label="Use boxes",
-                description=(
-                    "Whether to compute IoUs using the bounding boxes of the "
-                    "provided polylines rather than their actual geometries"
-                ),
-            )
-
-        inputs.bool(
-            "classwise",
-            default=True,
-            label="Classwise",
-            description=(
-                "Whether to only match objects with the same class label "
-                "(True) or allow matches between classes (False)"
-            ),
-        )
-
-        inputs.bool(
-            "dynamic",
-            default=True,
-            label="Dynamic",
-            description=(
-                "Whether to declare the dynamic object-level attributes that "
-                "are populated on the dataset's schema"
-            ),
-        )
-
-    def parse_parameters(self, ctx, params):
-        classes = params.pop("classes", None)
-        if classes is not None:
-            params["classes"] = _parse_classes(ctx, classes)
-
-
-class COCODetection(Detection):
-    def get_parameters(self, ctx, inputs):
-        inputs.view(
-            "parameters",
-            types.Header(
-                label="COCO-style evaluation",
-                description="https://docs.voxel51.com/user_guide/evaluation.html#coco-style-evaluation-default-spatial",
-                divider=True,
-            ),
-        )
-
-        super().get_parameters(ctx, inputs)
-
-        _get_iscrowd(ctx, inputs)
-
-        inputs.bool(
-            "compute_mAP",
-            default=False,
-            label="Compute mAP",
-            description=(
-                "Whether to perform the necessary computations so that mAP "
-                "and PR curves can be generated"
-            ),
-        )
-
-        compute_mAP = ctx.params.get("compute_mAP", False)
-
-        if compute_mAP:
-            inputs.str(
-                "iou_threshs",
-                label="IoU thresholds",
-                description=(
-                    "A comma-separated list of IoU thresholds to use when "
-                    "computing mAP"
-                ),
-            )
-
-            inputs.int(
-                "max_preds",
-                label="Maximum predictions",
-                description=(
-                    "A maximum number of predicted objects to evaluate when "
-                    "computing mAP and PR curves"
-                ),
-            )
-
-        _get_instance_mask_parameters(ctx, inputs)
-
-    def parse_parameters(self, ctx, params):
-        super().parse_parameters(ctx, params)
-
-        iou_threshs = params.pop("iou_threshs", None)
-        if iou_threshs is not None:
-            params["iou_threshs"] = [float(t) for t in iou_threshs.split(",")]
-
-
-class OpenImagesDetection(Detection):
-    def get_parameters(self, ctx, inputs):
-        inputs.view(
-            "parameters",
-            types.Header(
-                label="Open Images-style evaluation",
-                description="https://docs.voxel51.com/user_guide/evaluation.html#open-images-style-evaluation",
-                divider=True,
-            ),
-        )
-
-        super().get_parameters(ctx, inputs)
-
-        _get_iscrowd(ctx, inputs)
-
-        inputs.int(
-            "max_preds",
-            label="Maximum predictions",
-            description=(
-                "A maximum number of predicted objects to evaluate when "
-                "computing mAP and PR curves"
-            ),
-        )
-
-        _get_instance_mask_parameters(ctx, inputs)
-
-        target_view = get_target_view(ctx, inputs)
-        label_fields = _get_label_fields(target_view, fo.Classifications)
-
-        if not label_fields:
-            return
-
-        label_field_choices = types.DropdownView()
-        for field_name in sorted(label_fields):
-            label_field_choices.add_choice(field_name, label=field_name)
-
-        inputs.enum(
-            "pos_label_field",
-            label_field_choices.values(),
-            label="Positive label field",
-            description=(
-                "A field containing image-level classifications that specify "
-                "which classes should be evaluated in the image"
-            ),
-            view=label_field_choices,
-        )
-
-        inputs.enum(
-            "neg_label_field",
-            label_field_choices.values(),
-            label="Negative label field",
-            description=(
-                "A field containing image-level classifications that specify "
-                "which classes should not be evaluated in the image"
-            ),
-            view=label_field_choices,
-        )
-
-    def parse_parameters(self, ctx, params):
-        super().parse_parameters(ctx, params)
-
-        iou_threshs = params.pop("iou_threshs", None)
-        if iou_threshs is not None:
-            params["iou_threshs"] = [float(t) for t in iou_threshs.split(",")]
-
-
-class ActivityNetDetection(Detection):
-    def get_parameters(self, ctx, inputs):
-        inputs.view(
-            "parameters",
-            types.Header(
-                label="ActivityNet-style evaluation",
-                description="https://docs.voxel51.com/user_guide/evaluation.html#activitynet-style-evaluation-default-temporal",
-                divider=True,
-            ),
-        )
-
-        super().get_parameters(ctx, inputs)
-
-        inputs.bool(
-            "compute_mAP",
-            default=False,
-            label="Compute mAP",
-            description=(
-                "Whether to perform the necessary computations so that mAP "
-                "and PR curves can be generated"
-            ),
-        )
-
-        compute_mAP = ctx.params.get("compute_mAP", False)
-
-        if compute_mAP:
-            inputs.str(
-                "iou_threshs",
-                label="IoU thresholds",
-                description=(
-                    "A comma-separated list of IoU thresholds to use when "
-                    "computing mAP"
-                ),
-            )
-
-    def parse_parameters(self, ctx, params):
-        super().parse_parameters(ctx, params)
-
-        iou_threshs = params.pop("iou_threshs", None)
-        if iou_threshs is not None:
-            params["iou_threshs"] = [float(t) for t in iou_threshs.split(",")]
-
-
-class PlotlyPlotOperator(foo.Operator):
-    @property
-    def config(self):
-        return foo.OperatorConfig(
-            name="plotly_plot_operator",
-            label="Plotly Plot Operator",
-            description="Allows users to create various types of Plotly plots",
-            dynamic=True
-        )
+def compute_histogram(values, num_bins):
+    # Compute the histogram
+    counts, bin_edges = np.histogram(values, bins=num_bins)
     
-    def get_number_field_choices(self, ctx):
-        fields = types.Choices(space=6)
-        schemas = ctx.dataset.get_field_schema([fof.FloatField, fof.IntField], flat=True)
-        for field_path in schemas.keys():
-            fields.add_choice(field_path, label=field_path)
-        return fields
-
-
-    def create_axis_input(self, ctx, inputs, axis, is_heatmap):
-        axis_obj = types.Object()
-        axis_bool_view = types.CheckboxView(space=3)
-        axis_obj.str('title', default=None, label=f"Title")
-        axis_obj.bool('showgrid', default=True, label="Show Grid", view=axis_bool_view)
-        axis_obj.bool('zeroline', default=False, label="Show Zero Line", view=axis_bool_view)
-        axis_obj.bool('showline', default=True, label="Show Line", view=axis_bool_view)
-        axis_obj.bool('mirror', default=False, label="Mirror", view=axis_bool_view)
-        axis_obj.bool('autotick', default=True, label="Auto Tick", view=axis_bool_view)
-        axis_obj.bool('showticklabels', default=True, label="Show Tick Labels", view=axis_bool_view)
-        axis_obj.bool('showspikes', default=False, label="Show Spikes", view=axis_bool_view)
-
-        if not is_heatmap:
-            scale_choices = types.Choices()
-            scale_choices.add_choice("linear", label="Linear")
-            scale_choices.add_choice("log", label="Log")
-            scale_choices.add_choice("date", label="Date")
-            scale_choices.add_choice("category", label="Category")
-            axis_obj.enum('type', values=scale_choices.values(), view=scale_choices, default="linear", label="Scale Type")
-
-        axis_obj.float('tickangle', default=0, label="Tick Angle")
-        axis_obj.str('tickformat', default=None, label="Tick Format", view=types.View(space=3))
-
-        # Range settings
-        axis_obj.bool('autorange', default=True, label="Auto Range", view=axis_bool_view)
-        autorange = ctx.params.get(f"{axis}axis", {}).get('autorange', True)
-        # if not autorange:
-            # axis_obj.array('range', element_type=types.Number(), default=None, label="Range", view=types.View(space=3))
-
-        # todo - fix, this should not be a bool
-        # axis_obj.bool('showexponent', default="all", label="Show Exponent")
-        inputs.define_property(f"{axis}axis", axis_obj, label=f"{axis.capitalize()} Axis")
-
-    def resolve_input(self, ctx):
-        prompt = types.PromptView(submit_button_label="Create Plot")
-        inputs = types.Object()
-        inputs.str('plot_title', label='Plot Title', view=types.View(space=6))
-        plot_choices = types.Choices(label="Plot Type", space=6)
-        plot_choices.add_choice("histogram", label="Histogram")
-        plot_choices.add_choice("line", label="Line")
-        plot_choices.add_choice("scatter", label="Scatter")
-        plot_choices.add_choice("eval_results", label="Evaluation Results")
-        plot_choices.add_choice("heatmap", label="Heatmap")
-        plot_choices.add_choice("bar", label="Bar")
-
-        plot_type = ctx.params.get('plot_type')
-
-        inputs.enum('plot_type', values=plot_choices.values(), view=plot_choices, required=True)
-        is_heatmap = plot_type == 'heatmap' or plot_type == 'eval_results'
-
-        if not plot_type:
-            return types.Property(inputs, view=prompt)
-
-        self.create_axis_input(ctx, inputs, "x", is_heatmap)
-        self.create_axis_input(ctx, inputs, "y", is_heatmap)
-
-        fields = self.get_number_field_choices(ctx)
-        if not is_heatmap:
-            inputs.enum('x_field', values=fields.values(), view=fields, required=True, label="X Data Source")
-
-        if plot_type == 'eval_results':
-            eval_keys = types.Choices()
-            for key in ctx.dataset.list_evaluations():
-                eval_keys.add_choice(key, label=key)
-            inputs.enum('eval_key', values=eval_keys.values(), view=eval_keys, required=True, label="Evaluation Key")
-
-        if plot_type == 'histogram':
-            inputs.int('bins', default=10, label="Number of Bins", view=types.View(space=6))
-            inputs.obj('color', label="Color", default={"hex": '#ff0000'}, view=types.ColorView(compact=True))
-            inputs.bool('show_legend', default=True, label="Show Legend")
-            inputs.str('legend_title', default='Data', label="Legend Title")
-
-            
-
-            binning_function_choices = types.Choices()
-            binning_function_choices.add_choice("count", label="Count")
-            binning_function_choices.add_choice("sum", label="Sum")
-            binning_function_choices.add_choice("avg", label="Average")
-            binning_function_choices.add_choice("min", label="Minimum")
-            binning_function_choices.add_choice("max", label="Maximum")
-            inputs.enum('binning_function', values=binning_function_choices.values(), view=binning_function_choices, default="count", label="Binning Function")
-
-            normalization_choices = types.Choices()
-            normalization_choices.add_choice("", label="None")
-            normalization_choices.add_choice("percent", label="Percent")
-            normalization_choices.add_choice("probability", label="Probability")
-            normalization_choices.add_choice("density", label="Density")
-            normalization_choices.add_choice("probability density", label="Probability Density")
-            inputs.enum('normalization', values=normalization_choices.values(), view=normalization_choices, default="", label="Normalization")
-
-            inputs.bool('cumulative', default=False, label="Cumulative")
-
-            histfunc_choices = types.Choices()
-            histfunc_choices.add_choice("count", label="Count")
-            histfunc_choices.add_choice("sum", label="Sum")
-            histfunc_choices.add_choice("avg", label="Average")
-            histfunc_choices.add_choice("min", label="Minimum")
-            histfunc_choices.add_choice("max", label="Maximum")
-            inputs.enum('histfunc', values=histfunc_choices.values(), view=histfunc_choices, default="count", label="Histogram Function")
-
-        if plot_type == 'line' or plot_type == 'scatter':
-            inputs.enum('y_field', values=fields.values(), view=fields, required=True, label="Y Data Source")
-
-        return types.Property(inputs, view=prompt)
+    # Calculate the left edges of the bins
+    left_edges = bin_edges[:-1]
     
-    def execute(self, ctx):
-        plot_config = ctx.params
-        plot_config.pop('panel_state') # todo: remove this and panel_state from params
-        return {"plot_config": plot_config}
+    # Calculate the width of each bin
+    bin_widths = np.diff(bin_edges)
+    
+    return left_edges, counts, bin_widths
 
-def _get_iscrowd(ctx, inputs, default=None):
-    target = ctx.params.get("target", None)
-    target_view = _get_target_view(ctx, target)
-
-    gt_field = ctx.params["gt_field"]
-    root, _ = target_view._get_label_field_root(gt_field)
-
-    field = target_view.get_field(root, leaf=True)
-    schema = field.get_field_schema(
-        ftype=(fo.BooleanField, fo.IntField, fo.FloatField)
-    )
-
-    crowd_attrs = sorted(
-        k for k, v in schema.items() if k not in ("confidence", "index")
-    )
-
-    if crowd_attrs:
-        default = crowd_attrs[0]
-
-        crowd_attr_choices = types.AutocompleteView()
-        for crowd_attr in crowd_attrs:
-            crowd_attr_choices.add_choice(crowd_attr, label=crowd_attr)
-    else:
-        crowd_attr_choices = None
-
-    inputs.str(
-        "iscrowd",
-        default=default,
-        label="Crowd attribute",
-        description="The name of the crowd attribute (if any)",
-        view=crowd_attr_choices,
-    )
-
-
-def _get_instance_mask_parameters(ctx, inputs):
-    inputs.int(
-        "tolerance",
-        label="Tolerance",
-        description=(
-            "A tolerance, in pixels, when generating approximate "
-            "polylines for instance masks. Typical values are 1-3 pixels"
-        ),
-    )
-
-    error_level_choices = types.DropdownView()
-    error_level_choices.add_choice(
-        0,
-        label="0: Raise geometric errors that are encountered",
-    )
-    error_level_choices.add_choice(
-        1,
-        label="1: Log warnings if geometric errors are encountered",
-    )
-    error_level_choices.add_choice(
-        2,
-        label="2: Ignore geometric errors",
-    )
-
-    inputs.enum(
-        "error_level",
-        error_level_choices.values(),
-        default=1,
-        label="Error level",
-        description=(
-            "The error level to use when manipulating instance masks or "
-            "polylines. If error level is > 0, any calculation that "
-            "raises a geometric error will default to an IoU of 0"
-        ),
-        view=error_level_choices,
-    )
-
-
-class Segmentation(EvaluationMethod):
-    def get_parameters(self, ctx, inputs):
-        _get_mask_targets(ctx, inputs)
-
-    def parse_parameters(self, ctx, params):
-        mask_targets = params.pop("mask_targets", None)
-        if mask_targets is not None:
-            params["mask_targets"] = _parse_mask_targets(ctx, mask_targets)
-
-
-class SimpleSegmentation(Segmentation):
-    def get_parameters(self, ctx, inputs):
-        inputs.view(
-            "parameters",
-            types.Header(
-                label="Simple segmentation evaluation",
-                description="https://docs.voxel51.com/user_guide/evaluation.html#id17",
-                divider=True,
-            ),
-        )
-
-        super().get_parameters(ctx, inputs)
-
-        inputs.int(
-            "bandwidth",
-            label="Bandwidth",
-            description=(
-                "An optional bandwidth along the contours of the ground truth "
-                "masks to which to restrict attention when computing "
-                "accuracies. A typical value for this parameter is 5 pixels. "
-                "By default, the entire masks are evaluated"
-            ),
-        )
-
-        average_choices = types.DropdownView()
-        average_choices.add_choice(
-            "micro",
-            label="micro",
-            description=(
-                "Calculate metrics globally by considering each element of "
-                "the label indicator matrix as a label"
-            ),
-        )
-        average_choices.add_choice(
-            "macro",
-            label="macro",
-            description=(
-                "Calculate metrics for each label, and find their unweighted "
-                "mean. This does not take label imbalance into account"
-            ),
-        )
-        average_choices.add_choice(
-            "weighted",
-            label="weighted",
-            description=(
-                "Calculate metrics for each label, and find their average, "
-                "weighted by support (the number of true instances for each "
-                "label"
-            ),
-        )
-        average_choices.add_choice(
-            "samples",
-            label="samples",
-            description=(
-                "Calculate metrics for each instance, and find their average"
-            ),
-        )
-
-        inputs.enum(
-            "average",
-            average_choices.values(),
-            required=True,
-            label="Average",
-            description=(
-                "The averaging strategy to use when populating precision and "
-                "recall numbers on each sample"
-            ),
-            view=average_choices,
-        )
 
 
 def _get_classes(ctx, inputs):
@@ -1359,4 +1223,5 @@ def add_panel_navigation(panel, left=True, right=False, on_left=None, on_right=N
 
 def register(p):
     p.register(EvaluationPanel)
+    p.register(EvalPlots)
 

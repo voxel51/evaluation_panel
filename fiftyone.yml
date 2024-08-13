@@ -5,3 +5,4 @@ fiftyone:
  version: "*"
 operators:
  - evaluation_panel
+ - eval_plots
