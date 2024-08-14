@@ -299,204 +299,7 @@ class EvalPlots(foo.Panel):
     
     def on_load(self, ctx):
 
-        eval_key = "best_test"
-        info = ctx.dataset.get_evaluation_info(eval_key).serialize()
-        results = ctx.dataset.load_evaluation_results(eval_key)
-        pred_field = info["config"]["pred_field"]
-        gt_field = info["config"]["gt_field"]
-        classes = ctx.dataset.distinct(f"{pred_field}.detections.label")
-
-        x = f"{pred_field}.detections.confidence"
-        bins = 10
-        counts, edges, other = ctx.view.histogram_values(
-            x,
-            bins=bins,
-        )
-        counts = np.asarray(counts)
-        edges = np.asarray(edges)
         
-        left_edges = edges[:-1]
-        widths = edges[1:] - edges[:-1]
-        histogram_data = {
-            "name": f"{pred_field}.detections.confidence",
-            'x': left_edges.tolist(),
-            'y': counts.tolist(),
-            'type': 'bar',
-            'width': widths.tolist()
-        }
-        ctx.panel.data.confidence = [
-            # trace
-            histogram_data,
-        ]
-
-        x = f"{pred_field}.detections.{eval_key}_iou"
-        bins = 10
-        counts, edges, other = ctx.view.histogram_values(
-            x,
-            bins=bins,
-        )
-        counts = np.asarray(counts)
-        edges = np.asarray(edges)
-        
-        left_edges = edges[:-1]
-        widths = edges[1:] - edges[:-1]
-        histogram_data = {
-            "name": f"{pred_field}.detections.{eval_key}_iou",
-            'x': left_edges.tolist(),
-            'y': counts.tolist(),
-            'type': 'bar',
-            'width': widths.tolist()
-        }
-        ctx.panel.data.iou = [
-            # trace
-            histogram_data,
-        ]
-
-        tp = np.array(ctx.dataset.values(f"{eval_key}_tp"))
-        fp = np.array(ctx.dataset.values(f"{eval_key}_fp"))
-        fn = np.array(ctx.dataset.values(f"{eval_key}_fn"))
-
-        p = tp / (tp + fp)
-        p = np.nan_to_num(p, nan=0.0)
-        r = tp / (tp + fn)
-        r = np.nan_to_num(r, nan=0.0)
-        f1 = 2 * (p * r) / (p + r)
-        f1 = np.nan_to_num(f1, nan=0.0)
-
-        p_left_edges, p_counts, p_widths = compute_histogram(p,10)
-
-        histogram_data = {
-            "name": f"{pred_field}.detections.{eval_key}",
-            'x': p_left_edges.tolist(),
-            'y': p_counts.tolist(),
-            'type': 'bar',
-            'width': p_widths.tolist()
-        }
-        ctx.panel.data.precision = [
-            # trace
-            histogram_data,
-        ]
-
-        r_left_edges, r_counts, r_widths = compute_histogram(r,10)
-
-        histogram_data = {
-            "name": f"{pred_field}.detections.{eval_key}",
-            'x': r_left_edges.tolist(),
-            'y': r_counts.tolist(),
-            'type': 'bar',
-            'width': r_widths.tolist()
-        }
-        ctx.panel.data.recall = [
-            # trace
-            histogram_data,
-        ]
-
-        f1_left_edges, f1_counts, f1_widths = compute_histogram(f1,10)
-
-        histogram_data = {
-            "name": f"{pred_field}.detections.{eval_key}",
-            'x': f1_left_edges.tolist(),
-            'y': f1_counts.tolist(),
-            'type': 'bar',
-            'width': f1_widths.tolist()
-        }
-        ctx.panel.data.f1 = [
-            # trace
-            histogram_data,
-        ]
-
-
-        confusion_matrix, labels, ids = results._confusion_matrix()
-        confusion_matrix = np.asarray(confusion_matrix)
-        ids = np.asarray(ids)
-        num_rows, num_cols = confusion_matrix.shape
-        zlim = [0, confusion_matrix.max()]
-        eval_info = ctx.dataset.get_evaluation_info(eval_key)
-        gt_field = eval_info.config.gt_field
-        pred_field = eval_info.config.pred_field
-        label_type = ctx.dataset._get_label_field_type(gt_field)
-        use_patches = issubclass(label_type, (fol.Detections, fol.Polylines))
-        label_fields = [gt_field, pred_field]
-        xlabels = labels[:num_cols]
-        ylabels = labels[:num_rows]
-
-        # Flip data so plot will have the standard descending diagonal
-        # Flipping the yaxis via `autorange="reversed"` isn't an option because
-        # screenshots don't seem to respect that setting...
-
-
-        if use_patches:
-            selection_mode = "patches"
-            init_fcn = lambda view: view.to_evaluation_patches(eval_key)
-        else:
-            selection_mode = "select"
-            init_fcn = None
-
-        cm_data = {
-            'z': confusion_matrix,
-            'x': labels,
-            'y': labels,
-            'type': 'heatmap',
-        }
-        ctx.panel.data.cm = [
-            # trace
-            cm_data,
-        ]
-
-
-        p_class_list = []
-        r_class_list = []
-        f1_class_list = []
-        for cls in classes:
-
-            tp = sum(sublist.count("tp") for sublist in ctx.dataset.filter_labels(pred_field, F("label").is_in([cls])).values(f"{pred_field}.detections.{eval_key}"))
-            fp = sum(sublist.count("fp") for sublist in ctx.dataset.filter_labels(pred_field, F("label").is_in([cls])).values(f"{pred_field}.detections.{eval_key}"))
-            fn = sum(sublist.count("fn") for sublist in ctx.dataset.filter_labels(gt_field, F("label").is_in([cls])).values(f"{gt_field}.detections.{eval_key}"))
-
-
-            p = tp / (tp + fp)
-            p = np.nan_to_num(p, nan=0.0)
-            r = tp / (tp + fn)
-            r = np.nan_to_num(r, nan=0.0)
-            f1 = 2 * (p * r) / (p + r)
-            f1 = np.nan_to_num(f1, nan=0.0)
-        
-            p_class_list.append(p)
-            r_class_list.append(r)
-            f1_class_list.append(f1)
-        
-        histogram_data = {
-            "name": f"{pred_field}.detections.{eval_key}",
-            'x': classes,
-            'y': p_class_list,
-            'type': 'bar',
-        }
-        ctx.panel.data.p_class = [
-            # trace
-            histogram_data,
-        ]
-
-        histogram_data = {
-            "name": f"{pred_field}.detections.{eval_key}",
-            'x': classes,
-            'y': r_class_list,
-            'type': 'bar',
-        }
-        ctx.panel.data.r_class = [
-            # trace
-            histogram_data,
-        ]
-
-        histogram_data = {
-            "name": f"{pred_field}.detections.{eval_key}",
-            'x': classes,
-            'y': f1_class_list,
-            'type': 'bar',
-        }
-        ctx.panel.data.f1_class = [
-            # trace
-            histogram_data,
-        ]
 
         print("Panel loaded")
 
@@ -539,13 +342,359 @@ class EvalPlots(foo.Panel):
                 current_eval = ctx.dataset.get_evaluation_info(eval_key)
                 eval_type = current_eval.config.type
 
+                self._add_plots(ctx,stack)
+
             
         # Add Compare Key menu
         actions.enum('compare_key', label="Compare key", values=compare_keys,  view=types.View(space=3), on_change=self.on_change_config,)
 
-        config = {
-            "scrollZoom": False
+        
+
+        return types.Property(
+            panel,
+            view=types.GridView(
+                height=100,
+                width=100,
+                align_x="center",
+                align_y="center",
+                componentsProps={"container": {"sx": {"position": "relative"}}},
+            ),
+        )
+
+    def on_change_config(self, ctx):
+        eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+        current_eval = ctx.dataset.get_evaluation_info(eval_key).serialize()
+        eval_type = current_eval["config"]["type"]
+        results = ctx.dataset.load_evaluation_results(eval_key)
+        report = results.report()
+        table_list = []
+        self._update_plot_data(ctx)
+
+    def _update_plot_data(self, ctx,):
+        eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+        info = ctx.dataset.get_evaluation_info(eval_key).serialize()
+        results = ctx.dataset.load_evaluation_results(eval_key)
+        pred_field = info["config"]["pred_field"]
+        gt_field = info["config"]["gt_field"]
+        
+
+        if info["config"]["type"] != "classification":
+
+            classes = ctx.dataset.distinct(f"{pred_field}.detections.label")
+
+            x = f"{pred_field}.detections.confidence"
+            bins = 10
+            counts, edges, other = ctx.view.histogram_values(
+                x,
+                bins=bins,
+            )
+            counts = np.asarray(counts)
+            edges = np.asarray(edges)
+            
+            left_edges = edges[:-1]
+            widths = edges[1:] - edges[:-1]
+            histogram_data = {
+                "name": f"{pred_field}.detections.confidence",
+                'x': left_edges.tolist(),
+                'y': counts.tolist(),
+                'ids': ["01","02","03","04","05","06","07","08","09", "10"],
+                'type': 'bar',
+                'width': widths.tolist()
+            }
+            ctx.panel.set_data('my_stack.confidence', [
+                # trace
+                histogram_data,
+            ])
+
+            x = f"{pred_field}.detections.{eval_key}_iou"
+            bins = 10
+            counts, edges, other = ctx.view.histogram_values(
+                x,
+                bins=bins,
+            )
+            counts = np.asarray(counts)
+            edges = np.asarray(edges)
+            
+            left_edges = edges[:-1]
+            widths = edges[1:] - edges[:-1]
+            histogram_data = {
+                "name": f"{pred_field}.detections.{eval_key}_iou",
+                'x': left_edges.tolist(),
+                'y': counts.tolist(),
+                'type': 'bar',
+                'width': widths.tolist()
+            }
+            ctx.panel.set_data('my_stack.iou', [
+                # trace
+                histogram_data,
+            ])
+
+            tp = np.array(ctx.dataset.values(f"{eval_key}_tp"))
+            fp = np.array(ctx.dataset.values(f"{eval_key}_fp"))
+            fn = np.array(ctx.dataset.values(f"{eval_key}_fn"))
+
+            p = tp / (tp + fp)
+            p = np.nan_to_num(p, nan=0.0)
+            r = tp / (tp + fn)
+            r = np.nan_to_num(r, nan=0.0)
+            f1 = 2 * (p * r) / (p + r)
+            f1 = np.nan_to_num(f1, nan=0.0)
+
+            p_left_edges, p_counts, p_widths = compute_histogram(p,10)
+
+            histogram_data = {
+                "name": f"{pred_field}.detections.{eval_key}",
+                'x': p_left_edges.tolist(),
+                'y': p_counts.tolist(),
+                'type': 'bar',
+                'width': p_widths.tolist()
+            }
+            ctx.panel.set_data('my_stack.precision', [
+                # trace
+                histogram_data,
+            ])
+
+            r_left_edges, r_counts, r_widths = compute_histogram(r,10)
+
+            histogram_data = {
+                "name": f"{pred_field}.detections.{eval_key}",
+                'x': r_left_edges.tolist(),
+                'y': r_counts.tolist(),
+                'type': 'bar',
+                'width': r_widths.tolist()
+            }
+            ctx.panel.set_data('my_stack.recall', [
+                # trace
+                histogram_data,
+            ])
+
+            f1_left_edges, f1_counts, f1_widths = compute_histogram(f1,10)
+
+            histogram_data = {
+                "name": f"{pred_field}.detections.{eval_key}",
+                'x': f1_left_edges.tolist(),
+                'y': f1_counts.tolist(),
+                'type': 'bar',
+                'width': f1_widths.tolist()
+            }
+            ctx.panel.set_data('my_stack.f1', [
+                # trace
+                histogram_data,
+           ])
+            
+            p_class_list = []
+            r_class_list = []
+            f1_class_list = []
+            for cls in classes:
+
+                tp = sum(sublist.count("tp") for sublist in ctx.dataset.filter_labels(pred_field, F("label").is_in([cls])).values(f"{pred_field}.detections.{eval_key}"))
+                fp = sum(sublist.count("fp") for sublist in ctx.dataset.filter_labels(pred_field, F("label").is_in([cls])).values(f"{pred_field}.detections.{eval_key}"))
+                fn = sum(sublist.count("fn") for sublist in ctx.dataset.filter_labels(gt_field, F("label").is_in([cls])).values(f"{gt_field}.detections.{eval_key}"))
+
+
+                p = tp / (tp + fp)
+                p = np.nan_to_num(p, nan=0.0)
+                r = tp / (tp + fn)
+                r = np.nan_to_num(r, nan=0.0)
+                f1 = 2 * (p * r) / (p + r)
+                f1 = np.nan_to_num(f1, nan=0.0)
+            
+                p_class_list.append(p)
+                r_class_list.append(r)
+                f1_class_list.append(f1)
+            
+            histogram_data = {
+                "name": f"{pred_field}.detections.{eval_key}",
+                'x': classes,
+                'y': p_class_list,
+                'type': 'bar',
+            }
+            ctx.panel.set_data('my_stack.p_class', [
+                # trace
+                histogram_data,
+            ])
+
+            histogram_data = {
+                "name": f"{pred_field}.detections.{eval_key}",
+                'x': classes,
+                'y': r_class_list,
+                'type': 'bar',
+            }
+            ctx.panel.set_data('my_stack.r_class', [
+                # trace
+                histogram_data,
+            ])
+
+            histogram_data = {
+                "name": f"{pred_field}.detections.{eval_key}",
+                'x': classes,
+                'y': f1_class_list,
+                'type': 'bar',
+            }
+            ctx.panel.set_data('my_stack.f1_class', [
+                # trace
+                histogram_data,
+            ])
+        elif  info["config"]["type"] == "classification":
+
+            classes = ctx.dataset.distinct(f"{pred_field}.label")
+
+            x = f"{pred_field}.confidence"
+            bins = 10
+            counts, edges, other = ctx.view.histogram_values(
+                x,
+                bins=bins,
+            )
+            counts = np.asarray(counts)
+            edges = np.asarray(edges)
+            
+            left_edges = edges[:-1]
+            widths = edges[1:] - edges[:-1]
+            histogram_data = {
+                "name": f"{pred_field}.confidence",
+                'x': left_edges.tolist(),
+                'ids': ["01","02","03","04","05","06","07","08","09", "10"],
+                'y': counts.tolist(),
+                'type': 'bar',
+                'width': widths.tolist()
+            }
+            ctx.panel.set_data('my_stack.confidence', [
+                # trace
+                histogram_data,
+            ])
+
+            p_class_list = []
+            r_class_list = []
+            f1_class_list = []
+            conf_class_list = []
+            for cls in classes:
+
+                tp = ctx.dataset.filter_labels(pred_field, F("label").is_in([cls])).values(f"{eval_key}").count(True)
+                fp = ctx.dataset.filter_labels(pred_field, F("label").is_in([cls])).values(f"{eval_key}").count(False)
+                fn = ctx.dataset.filter_labels(gt_field, F("label").is_in([cls])).values(f"{eval_key}").count(False)
+
+
+
+                p = tp / (tp + fp)
+                p = np.nan_to_num(p, nan=0.0)
+                r = tp / (tp + fn)
+                r = np.nan_to_num(r, nan=0.0)
+                f1 = 2 * (p * r) / (p + r)
+                f1 = np.nan_to_num(f1, nan=0.0)
+            
+                p_class_list.append(p)
+                r_class_list.append(r)
+                f1_class_list.append(f1)
+            
+            histogram_data = {
+                "name": f"{pred_field}.detections.{eval_key}",
+                'x': classes,
+                'y': p_class_list,
+                'type': 'bar',
+            }
+            ctx.panel.set_data('my_stack.p_class', [
+                # trace
+                histogram_data,
+            ])
+
+            histogram_data = {
+                "name": f"{pred_field}.detections.{eval_key}",
+                'x': classes,
+                'y': r_class_list,
+                'type': 'bar',
+            }
+            ctx.panel.set_data('my_stack.r_class', [
+                # trace
+                histogram_data,
+            ])
+
+            histogram_data = {
+                "name": f"{pred_field}.detections.{eval_key}",
+                'x': classes,
+                'y': f1_class_list,
+                'type': 'bar',
+            }
+            ctx.panel.set_data('my_stack.f1_class', [
+                # trace
+                histogram_data,
+            ])
+
+
+        confusion_matrix, labels, ids = results._confusion_matrix(include_other=False, include_missing=False,)
+        confusion_matrix = np.asarray(confusion_matrix)
+        ids = np.asarray(ids)
+        num_rows, num_cols = confusion_matrix.shape
+        zlim = [0, confusion_matrix.max()]
+        eval_info = ctx.dataset.get_evaluation_info(eval_key)
+        gt_field = eval_info.config.gt_field
+        pred_field = eval_info.config.pred_field
+        label_type = ctx.dataset._get_label_field_type(gt_field)
+        use_patches = issubclass(label_type, (fol.Detections, fol.Polylines))
+        label_fields = [gt_field, pred_field]
+        xlabels = labels[:num_cols]
+        ylabels = labels[:num_rows]
+
+        # Flip data so plot will have the standard descending diagonal
+        # Flipping the yaxis via `autorange="reversed"` isn't an option because
+        # screenshots don't seem to respect that setting...
+
+
+        if use_patches:
+            selection_mode = "patches"
+            init_fcn = lambda view: view.to_evaluation_patches(eval_key)
+        else:
+            selection_mode = "select"
+            init_fcn = None
+
+        cm_data = {
+            'z': confusion_matrix,
+            'x': labels,
+            'y': labels,
+            'type': 'heatmap',
         }
+        ctx.panel.set_data('my_stack.cm', [
+            # trace
+            cm_data,
+        ])
+
+
+        
+
+    def on_numerical_click(self,ctx):
+        print(ctx.params)
+        path = ctx.params.get("path")
+        plot = ctx.panel.get_state(path)
+        raise Exception(plot)
+        """
+        params = ctx.panel.state.get("my_stack.data")
+        x = params["x"]
+        left_edge
+        right_edge
+        plot_clicked
+
+        bar_click
+        bars_clicked
+
+        name = params["name"]
+        view = ctx.dataset.match(name < x)
+        ctx.ops.set_view(view)
+        """
+
+
+    def on_categorical_click(self,ctx):
+        pass
+        
+    def _add_plots(self, ctx, stack):
+    
+        eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+        
+            
+        current_eval = ctx.dataset.get_evaluation_info(eval_key).serialize()
+
+        
+        config = {
+                "scrollZoom": False
+            }
         layout = {
             "title": "Confidence",
             "bargap": 0,
@@ -563,106 +712,108 @@ class EvalPlots(foo.Panel):
                 "showlegend": True
             }
         }
-        panel.add_property('confidence', types.Property(
-            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
+        stack.add_property('confidence', types.Property(
+            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click, on_selected=self.on_numerical_click)
         ))
 
-        config = {
-            "scrollZoom": False
-        }
-        layout = {
-            "title": "IOU",
-            "bargap": 0,
-            "bargroupgap": 0,
-            "xaxis": {
-                "title": "IOU"
-            },
-            "yaxis": {
-                "title": "Count"
-            },
-            "showlegend": True,
-            "legend": {
-                "x": 0,
-                "y": 1,
-                "showlegend": True
-            }
-        }
-        panel.add_property('iou', types.Property(
-            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
-        ))
 
-        config = {
-            "scrollZoom": False
-        }
-        layout = {
-            "title": "Precision Distribution",
-            "bargap": 0,
-            "bargroupgap": 0,
-            "xaxis": {
-                "title": "Precision per Sample"
-            },
-            "yaxis": {
-                "title": "Count"
-            },
-            "showlegend": True,
-            "legend": {
-                "x": 0,
-                "y": 1,
-                "showlegend": True
+        if current_eval["config"]["type"] != "classification":
+            config = {
+                "scrollZoom": False
             }
-        }
-        panel.add_property('precision', types.Property(
-            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
-        ))
+            layout = {
+                "title": "IOU",
+                "bargap": 0,
+                "bargroupgap": 0,
+                "xaxis": {
+                    "title": "IOU"
+                },
+                "yaxis": {
+                    "title": "Count"
+                },
+                "showlegend": True,
+                "legend": {
+                    "x": 0,
+                    "y": 1,
+                    "showlegend": True
+                }
+            }
+            stack.add_property('iou', types.Property(
+                types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
+            ))
 
-       
-        config = {
-            "scrollZoom": False
-        }
-        layout = {
-            "title": "Recall Distribution",
-            "bargap": 0,
-            "bargroupgap": 0,
-            "xaxis": {
-                "title": "Recall per Sample"
-            },
-            "yaxis": {
-                "title": "Count"
-            },
-            "showlegend": True,
-            "legend": {
-                "x": 0,
-                "y": 1,
-                "showlegend": True
+            config = {
+                "scrollZoom": False
             }
-        }
-        panel.add_property('recall', types.Property(
-            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
-        ))
+            layout = {
+                "title": "Precision Distribution",
+                "bargap": 0,
+                "bargroupgap": 0,
+                "xaxis": {
+                    "title": "Precision per Sample"
+                },
+                "yaxis": {
+                    "title": "Count"
+                },
+                "showlegend": True,
+                "legend": {
+                    "x": 0,
+                    "y": 1,
+                    "showlegend": True
+                }
+            }
+            stack.add_property('precision', types.Property(
+                types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
+            ))
 
-        config = {
-            "scrollZoom": False
-        }
-        layout = {
-            "title": "F1-Score Distribution",
-            "bargap": 0,
-            "bargroupgap": 0,
-            "xaxis": {
-                "title": "F1-Score per Sample"
-            },
-            "yaxis": {
-                "title": "Count"
-            },
-            "showlegend": True,
-            "legend": {
-                "x": 0,
-                "y": 1,
-                "showlegend": True
+            
+            config = {
+                "scrollZoom": False
             }
-        }
-        panel.add_property('f1', types.Property(
-            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
-        ))
+            layout = {
+                "title": "Recall Distribution",
+                "bargap": 0,
+                "bargroupgap": 0,
+                "xaxis": {
+                    "title": "Recall per Sample"
+                },
+                "yaxis": {
+                    "title": "Count"
+                },
+                "showlegend": True,
+                "legend": {
+                    "x": 0,
+                    "y": 1,
+                    "showlegend": True
+                }
+            }
+            stack.add_property('recall', types.Property(
+                types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
+            ))
+
+            config = {
+                "scrollZoom": False
+            }
+            layout = {
+                "title": "F1-Score Distribution",
+                "bargap": 0,
+                "bargroupgap": 0,
+                "xaxis": {
+                    "title": "F1-Score per Sample"
+                },
+                "yaxis": {
+                    "title": "Count"
+                },
+                "showlegend": True,
+                "legend": {
+                    "x": 0,
+                    "y": 1,
+                    "showlegend": True
+                }
+            }
+            stack.add_property('f1', types.Property(
+                types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
+            ))
 
         config = {
             "scrollZoom": False
@@ -684,7 +835,7 @@ class EvalPlots(foo.Panel):
                 "showlegend": True
             }
         }
-        panel.add_property('p_class', types.Property(
+        stack.add_property('p_class', types.Property(
             types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_categorical_click)
         ))
 
@@ -708,7 +859,7 @@ class EvalPlots(foo.Panel):
                 "showlegend": True
             }
         }
-        panel.add_property('r_class', types.Property(
+        stack.add_property('r_class', types.Property(
             types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_categorical_click)
         ))
 
@@ -732,7 +883,7 @@ class EvalPlots(foo.Panel):
                 "showlegend": True
             }
         }
-        panel.add_property('f1_class', types.Property(
+        stack.add_property('f1_class', types.Property(
             types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_categorical_click)
         ))
 
@@ -743,40 +894,9 @@ class EvalPlots(foo.Panel):
                     "yaxis": {"fixedrange": True, "title": "Model predictions"},
                 }
         
-        panel.add_property('cm', types.Property(
+        stack.add_property('cm', types.Property(
             types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout,)
         ))
-
-        return types.Property(
-            panel,
-            view=types.GridView(
-                height=100,
-                width=100,
-                align_x="center",
-                align_y="center",
-                componentsProps={"container": {"sx": {"position": "relative"}}},
-            ),
-        )
-
-    def on_change_config(self, ctx):
-        eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
-        current_eval = ctx.dataset.get_evaluation_info(eval_key).serialize()
-        eval_type = current_eval["config"]["type"]
-        results = ctx.dataset.load_evaluation_results(eval_key)
-        report = results.report()
-        table_list = []
-
-    def on_numerical_click(self,ctx):
-        params = ctx.params.get("data")
-        x = params["x"]
-        name = params["name"]
-        view = ctx.dataset.match(name < x)
-        ctx.ops.set_view(view)
-
-
-    def on_categorical_click(self,ctx):
-        pass
-        
 
 def _eval_results(ctx, stack, current_eval):
 
