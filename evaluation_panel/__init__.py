@@ -1,121 +1,116 @@
+import fiftyone as fo
+import fiftyone.brain as fob
+import fiftyone.core.fields as fof
+import fiftyone.core.labels as fol
+import fiftyone.core.patches as fop
 import fiftyone.operators as foo
 import fiftyone.operators.types as types
-import fiftyone.brain as fob
-from fiftyone.brain import Similarity
-import fiftyone as fo
 import fiftyone.zoo.models as fozm
-import fiftyone.core.patches as fop
-from fiftyone import ViewField as F
-import fiftyone.core.fields as fof
 import numpy as np
-import fiftyone.core.labels as fol
-
+from fiftyone import ViewField as F
+from fiftyone.brain import Similarity
 
 
 class EvaluationPanel(foo.Panel):
-
     @property
     def config(self):
         return foo.PanelConfig(
-            name="evaluation_panel",
-            label="Evalution Panel",
-            icon="assessment"
+            name="evaluation_panel", label="evaluation_panel"
         )
-    
+
     # def on_change_view(self, ctx):
     #     print("View changed")
-    
+
     def on_load(self, ctx):
         print("Panel loaded")
 
-
-    
     def render(self, ctx):
         panel = types.Object()
-        
+
         # Define main stack
         stack = panel.v_stack("my_stack", align_x="center", gap=2)
 
-        stack.md("""
+        stack.md(
+            """
             ### Evaluate Your Models
         """,
-        name="md1")
-        
-        eval_comp = stack.menu("eval_comp", variant="contained")
-        # Add operator buttons
-        eval_comp.btn("evaluate_model", label="Evaluate Model", on_click=self.evaluate_model)
-        eval_comp.btn("compare_models", label="Compare Models", on_click=self.compare_models)
+            name="md1",
+        )
 
+        # Add operator buttons
+        stack.btn(
+            "evaluate_model", label="Evaluate Model", on_click=self.evaluate_model
+        )
+        stack.btn(
+            "compare_models", label="compare_models", on_click=self.compare_models
+        )
 
         # Create the eval key options for the menus
-        keys = []
+        eval_keys = types.Choices()
         for key in ctx.dataset.list_evaluations():
-            keys.append(key)
-        current_eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
-        current_compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key")
-        eval_keys = keys.copy()
-        compare_keys = keys.copy()
-        if current_compare_key in eval_keys:
-            eval_keys.remove(current_compare_key)
-        if current_eval_key in compare_keys:
-            compare_keys.remove(current_eval_key)
-        menu = stack.menu('menu', variant="square", width=100, align_y="center")
-        actions = menu.btn_group('actions')
+            eval_keys.add_choice(key, label=key)
+
+        menu = stack.menu("menu", variant="square", width=100, align_y="center")
+        actions = menu.btn_group("actions")
 
         # Add Eval Key Menu
-        actions.enum('eval_key', label="Evaluation key", values=eval_keys,  view=types.View(space=3), on_change=self.on_change_config,)
+        actions.enum(
+            "eval_key",
+            label="Evaluation key",
+            values=eval_keys.values(),
+            view=types.View(space=3),
+            on_change=self.on_change_config,
+        )
 
-        
+        compare_keys = eval_keys.values()
 
-        # # Check to see if state initialized the stack
-        # if ctx.panel.get_state("my_stack") != None:
-        #     eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
-        #     if eval_key != None:
+        # Check to see if state initialized the stack
+        if ctx.panel.get_state("my_stack") is not None:
+            eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+            if eval_key is not None:
+                # Remove active eval key from the compare list
+                compare_keys = eval_keys.values()
+                index = compare_keys.index(eval_key)
+                compare_keys.pop(index)
 
-        #         # Remove active eval key from the compare list
-        #         compare_keys = eval_keys.values()
-        #         index = compare_keys.index(eval_key )
-        #         compare_keys.pop(index)
+                # Find the type of eval
+                current_eval = ctx.dataset.get_evaluation_info(eval_key)
+                eval_type = current_eval.config.type
 
-        #         # Find the type of eval
-        #         current_eval = ctx.dataset.get_evaluation_info(eval_key)
-        #         eval_type = current_eval.config.type
-
-            
         # Add Compare Key menu
-        actions.enum('compare_key', label="Compare key", values=compare_keys,  view=types.View(space=3), on_change=self.on_change_config,)
+        actions.enum(
+            "compare_key",
+            label="Compare key",
+            values=compare_keys,
+            view=types.View(space=3),
+            on_change=self.on_change_config,
+        )
 
         # Define Tab View for Eval Results vs Info
         tabs = types.TabsView()
         tabs.add_choice("results", label="Evaluation Results")
         tabs.add_choice("info", label="Evaluation Info")
 
-        
         stack.str("tabs", view=tabs, on_change=self.on_path_change)
 
         # Define the paths for tabs
-        if ctx.panel.get_state("my_stack") != None:
+        if ctx.panel.get_state("my_stack") is not None:
             eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
-            if eval_key != None:
+            if eval_key is not None:
                 current_tab = ctx.panel.get_state("my_stack.tabs")
 
                 current_eval = ctx.dataset.get_evaluation_info(eval_key)
-                if current_tab == 'results':
-
+                if current_tab == "results":
                     current_eval = ctx.dataset.get_evaluation_info(eval_key).serialize()
                     _eval_results(ctx, stack, current_eval)
-                    
-                    
-                elif current_tab== 'info':
+                    self._add_plots(ctx, stack)
+
+                elif current_tab == "info":
                     if current_eval:
-                        _eval_info(ctx, stack, current_eval) 
-    
+                        _eval_info(ctx, stack, current_eval)
+
                 else:
                     stack.md("# The third tab")
-
-        
-        
-        
 
         return types.Property(
             panel,
@@ -140,22 +135,29 @@ class EvaluationPanel(foo.Panel):
 
         params = ctx.params["data"]
         if params["x"] == params["y"]:
-
             # Filter only X/Y labels
 
-            view1 = ctx.dataset.filter_labels("First Model", F("eval_first").is_in("tp"))
+            view1 = ctx.dataset.filter_labels(
+                "First Model", F("eval_first").is_in("tp")
+            )
             view2 = view1.filter_labels("ground_truth", F("eval_first").is_in("tp"))
             view3 = view2.filter_labels("First Model", F("label").is_in(params["x"]))
             view4 = view3.filter_labels("ground_truth", F("label").is_in(params["x"]))
-            final_view = view4.filter_labels("Best Model", F("label").is_in(""), only_matches=False)
+            final_view = view4.filter_labels(
+                "Best Model", F("label").is_in(""), only_matches=False
+            )
         else:
             # Grab FP
-            view1 = ctx.dataset.filter_labels("First Model", F("eval_first").is_in("fp"))
+            view1 = ctx.dataset.filter_labels(
+                "First Model", F("eval_first").is_in("fp")
+            )
 
             # Grab only samples with label X/Y
             view2 = view1.filter_labels("First Model", F("label").is_in(params["y"]))
             view3 = view2.filter_labels("ground_truth", F("label").is_in(params["x"]))
-            final_view = view3.filter_labels("Best Model", F("label").is_in(""), only_matches=False)
+            final_view = view3.filter_labels(
+                "Best Model", F("label").is_in(""), only_matches=False
+            )
 
         ctx.ops.set_view(final_view)
 
@@ -164,16 +166,15 @@ class EvaluationPanel(foo.Panel):
         ctx.ops.set_active_fields(["ground_truth", "Best Model"])
         params = ctx.params
         if params["x"] == params["y"]:
-
-
-
             # Filter only X/Y labels
 
             view1 = ctx.dataset.filter_labels("Best Model", F("eval_best").is_in("tp"))
             view2 = view1.filter_labels("ground_truth", F("eval_best").is_in("tp"))
             view3 = view2.filter_labels("Best Model", F("label").is_in(params["x"]))
             view4 = view3.filter_labels("ground_truth", F("label").is_in(params["x"]))
-            final_view = view4.filter_labels("First Model", F("label").is_in(""), only_matches=False)
+            final_view = view4.filter_labels(
+                "First Model", F("label").is_in(""), only_matches=False
+            )
         else:
             # Grab FP
             view1 = ctx.dataset.filter_labels("Best Model", F("eval_best").is_in("fp"))
@@ -181,43 +182,49 @@ class EvaluationPanel(foo.Panel):
             # Grab only samples with label X/Y
             view2 = view1.filter_labels("Best Model", F("label").is_in(params["y"]))
             view3 = view2.filter_labels("ground_truth", F("label").is_in(params["x"]))
-            final_view = view3.filter_labels("First Model", F("label").is_in(""), only_matches=False)
+            final_view = view3.filter_labels(
+                "First Model", F("label").is_in(""), only_matches=False
+            )
 
         ctx.ops.set_view(final_view)
-        
-
 
     def on_plot_click(self, ctx):
         ctx.ops.track_event("try_visdrone_plot_click")
 
-        type = ctx.panel.state.plot_config.get('plot_type')
+        type = ctx.panel.state.plot_config.get("plot_type")
         # print('on plot click', ctx.params)
         if type == "histogram":
             min = ctx.params.get("range", [])[0]
             max = ctx.params.get("range", [])[1]
             filter = {}
             filter[ctx.params.get("x_data_source")] = {"$gte": min, "$lte": max}
-            ctx.trigger("set_view", dict(view=[
-                {
-                    "_cls": "fiftyone.core.stages.Match",
-                    "kwargs": [
-                    [
-                        "filter",
-                        filter
+            ctx.trigger(
+                "set_view",
+                dict(
+                    view=[
+                        {
+                            "_cls": "fiftyone.core.stages.Match",
+                            "kwargs": [["filter", filter]],
+                        }
                     ]
-                    ],
-                }
-            ]))
+                ),
+            )
         elif type == "eval_results":
-            print('heatmap x', ctx.params.get("x"))
-            print('heatmap y', ctx.params.get("y"))
-            set_view_for_confustion_matrix_cell(ctx, "ground_truth", "predictions", ctx.params.get("x"), ctx.params.get("y"))
+            print("heatmap x", ctx.params.get("x"))
+            print("heatmap y", ctx.params.get("y"))
+            set_view_for_confustion_matrix_cell(
+                ctx,
+                "ground_truth",
+                "predictions",
+                ctx.params.get("x"),
+                ctx.params.get("y"),
+            )
 
     def update_plot_data(self, ctx):
-        print('update plot data --------')
+        print("update plot data --------")
         print(ctx.params)
-        success_result = ctx.params.get('result', {})
-        success_results_plot_config = success_result.get('plot_config', None)
+        success_result = ctx.params.get("result", {})
+        success_results_plot_config = success_result.get("plot_config", None)
         plot_config = success_results_plot_config or ctx.panel.state.plot_config
         data = get_plot_data(ctx.dataset, plot_config)
         ctx.panel.data.plot = data
@@ -225,27 +232,32 @@ class EvaluationPanel(foo.Panel):
             ctx.panel.state.plot_config = plot_config
 
     def on_success(self, ctx):
-        print('on success')
+        print("on success")
         print(ctx.params)
-        result = ctx.params.get('result', )
-        new_config = result.get('plot_config')
+        result = ctx.params.get(
+            "result",
+        )
+        new_config = result.get("plot_config")
         ctx.panel.state.plot_config = new_config
         self.update_plot_data(ctx)
 
     def on_click_configure(self, ctx):
-        ctx.prompt("@voxel51/try_fiftyone/plotly_plot_operator", params=ctx.panel.state.plot_config, on_success=self.update_plot_data)
-        
+        ctx.prompt(
+            "@voxel51/try_fiftyone/plotly_plot_operator",
+            params=ctx.panel.state.plot_config,
+            on_success=self.update_plot_data,
+        )
+
     def on_click_start(self, ctx):
         ctx.panel.state.welcome = False
 
     def go_to_next_page(self, ctx):
         if ctx.panel.state.page == 1:
             ctx.panel.state.view = ""
-        ctx.panel.state.page = ctx.panel.state.page+1
-        
+        ctx.panel.state.page = ctx.panel.state.page + 1
 
     def go_to_previous_page(self, ctx):
-        ctx.panel.state.page = ctx.panel.state.page-1
+        ctx.panel.state.page = ctx.panel.state.page - 1
 
     def reset_page(self, ctx):
         ctx.panel.state.page = 1
@@ -260,7 +272,7 @@ class EvaluationPanel(foo.Panel):
         ctx.panel.state.view = "compare"
 
     def on_path_change(self, ctx):
-        #ctx.trigger("reload_samples")
+        # ctx.trigger("reload_samples")
 
         print("on_change:", ctx.params)
 
@@ -273,66 +285,1500 @@ class EvaluationPanel(foo.Panel):
         table_list = []
         for key in report:
             table_list.append(
-                {"class": key,
-                "precision": report[key]["precision"],
-                "recall": report[key]["recall"],
-                "f1-score": report[key]["f1-score"],
-                "support": report[key]["support"],
+                {
+                    "class": key,
+                    "precision": report[key]["precision"],
+                    "recall": report[key]["recall"],
+                    "f1-score": report[key]["f1-score"],
+                    "support": report[key]["support"],
                 }
             )
-        ctx.panel.set_data("my_stack.evaluations", table_list) 
+        ctx.panel.set_state("my_stack.evaluations", table_list)
 
         if eval_type == "detection":
             if current_eval["config"]["compute_mAP"]:
                 mAP_list = []
-                for i,label in enumerate(results.classes):
+                for i, label in enumerate(results.classes):
                     new_row = {"class": label, "AP": results._classwise_AP[i]}
                     mAP_list.append(new_row)
 
                 new_row = {"class": "All", "AP": results.mAP()}
                 mAP_list.append(new_row)
-                ctx.panel.set_data("my_stack.mAP_evaluations", mAP_list) 
+                ctx.panel.set_state("my_stack.mAP_evaluations", mAP_list)
+        self._update_plot_data(ctx)
+
+    def on_numerical_click(self, ctx):
+        params = ctx.params
+        path = ctx.params.get("path")
+        plot = ctx.panel.get_state(path)
+
+        left_edge = params["range"][0]
+        right_edge = params["range"][1]
+
+        if "detections" in plot[0]["name"]:
+            eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+            compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key", None)
+            path = ctx.params.get("path")
+            info = ctx.dataset.get_evaluation_info(eval_key).serialize()
+            pred_field = info["config"]["pred_field"]
+            if len(plot) == 1:
+                view = ctx.dataset.filter_labels(
+                    pred_field, F(plot[0]["name"]) <= right_edge
+                ).filter_labels(pred_field, F(plot[0]["name"].split(".")[-1]) >= left_edge)
+                ctx.ops.set_view(view)
+            elif len(plot) == 2:
+                c_info = ctx.dataset.get_evaluation_info(compare_key).serialize()
+                c_pred_field = c_info["config"]["pred_field"]
+                view = (
+                    ctx.dataset.filter_labels(
+                        pred_field, F(plot[0]["name"].split(".")[-1]) <= right_edge
+                    )
+                    .filter_labels(pred_field, F(plot[0]["name"].split(".")[-1]) >= left_edge)
+                    .filter_labels(c_pred_field, F(plot[1]["name"].split(".")[-1]) <= right_edge)
+                    .filter_labels(c_pred_field, F(plot[1]["name"].split(".")[-1]) >= left_edge)
+                )
+                ctx.ops.set_view(view)
+            else:
+                raise Exception(plot)
+        else:
+            if len(plot) == 1:
+                view = ctx.dataset.match(F(plot[0]["name"]) <= right_edge).match(
+                    F(plot[0]["name"]) >= left_edge
+                )
+                ctx.ops.set_view(view)
+            elif len(plot) == 2:
+                view1 = ctx.dataset.match(F(plot[0]["name"]) <= right_edge).match(
+                    F(plot[0]["name"]) >= left_edge
+                )
+                view2 = ctx.dataset.match(F(plot[0]["name"]) <= right_edge).match(
+                    F(plot[0]["name"]) >= left_edge
+                )
+                view = view1.concat(view2)
+                ctx.ops.set_view(view)
+            else:
+                raise Exception(plot)
+
+    def on_categorical_click(self, ctx):
+        params = ctx.params
+        path = ctx.params.get("path")
+        plot = ctx.panel.get_state(path)
+        eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+        compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key", None)
+        path = ctx.params.get("path")
+        info = ctx.dataset.get_evaluation_info(eval_key).serialize()
+        pred_field = info["config"]["pred_field"]
+
+        if compare_key is None:
+            view = ctx.dataset.filter_labels(
+                pred_field, F("label").is_in([params["x"]])
+            )
+            ctx.ops.set_view(view)
+        elif compare_key is not None:
+            c_info = ctx.dataset.get_evaluation_info(compare_key).serialize()
+            c_pred_field = c_info["config"]["pred_field"]
+
+            view1 = ctx.dataset.filter_labels(
+                pred_field, F("label").is_in([params["x"]])
+            )
+            view2 = ctx.dataset.filter_labels(
+                c_pred_field, F("label").is_in([params["x"]])
+            )
+            view = view1.concat(view2)
+            ctx.ops.set_view(view)
+        else:
+            raise Exception(plot)
+
+    def on_cm_click(self, ctx):
+        params = ctx.params
+        path = ctx.params.get("path")
+        plot = ctx.panel.get_state(path)
+        eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+        compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key", None)
+        path = ctx.params.get("path")
+        info = ctx.dataset.get_evaluation_info(eval_key).serialize()
+        pred_field = info["config"]["pred_field"]
+        gt_field = info["config"]["gt_field"]
+        eval_type = info["config"]["type"]
+
+        if "c_cm" not in path:
+            if params["x"] == "(none)":
+                view = ctx.dataset.filter_labels(
+                gt_field, F("label").is_in([params["y"]])
+            ).filter_labels(
+                gt_field, F(eval_key).is_in(["fn"])
+            )
+            elif params["y"] == "(none)":
+                view = ctx.dataset.filter_labels(
+                pred_field, F("label").is_in([params["x"]])
+            ).filter_labels(
+                pred_field, F(eval_key).is_in(["fp"])
+            )
+            else:
+                view = ctx.dataset.filter_labels(
+                    gt_field, F("label").is_in([params["y"]])
+                ).filter_labels(pred_field, F("label").is_in([params["x"]]))
+            ctx.ops.set_view(view)
+        else:
+            c_info = ctx.dataset.get_evaluation_info(compare_key).serialize()
+            c_pred_field = c_info["config"]["pred_field"]
+            c_gt_field = c_info["config"]["gt_field"]
+            if params["x"] == "(none)":
+                view = ctx.dataset.filter_labels(
+                c_gt_field, F("label").is_in([params["y"]])
+            ).filter_labels(
+                c_gt_field, F(eval_key).is_in(["fn"])
+            )
+            elif params["y"] == "(none)":
+                view = ctx.dataset.filter_labels(
+                c_pred_field, F("label").is_in([params["x"]])
+            ).filter_labels(
+                c_pred_field, F(eval_key).is_in(["fp"])
+            )
+            else:
+                view = ctx.dataset.filter_labels(
+                c_gt_field, F("label").is_in([params["y"]])
+            ).filter_labels(c_pred_field, F("label").is_in([params["x"]]))
+            ctx.ops.set_view(view)
+
+    def _update_plot_data(
+        self,
+        ctx,
+    ):
+        eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+        compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key", None)
+        path = ctx.params.get("path")
+        info = ctx.dataset.get_evaluation_info(eval_key).serialize()
+        results = ctx.dataset.load_evaluation_results(eval_key)
+        pred_field = info["config"]["pred_field"]
+        gt_field = info["config"]["gt_field"]
+        eval_type = info["config"]["type"]
+        if compare_key is None:
+            if eval_type != "classification":
+                classes = ctx.dataset.distinct(f"{pred_field}.detections.label")
+
+                x = f"{pred_field}.detections.confidence"
+                bins = 10
+                counts, edges, other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
+                counts = np.asarray(counts)
+                edges = np.asarray(edges)
+
+                left_edges = edges[:-1]
+                widths = edges[1:] - edges[:-1]
+                histogram_data = {
+                    "name": f"{pred_field}.detections.confidence",
+                    "x": left_edges.tolist(),
+                    "y": counts.tolist(),
+                    "ids": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"],
+                    "type": "bar",
+                    "width": widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.confidence",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                x = f"{pred_field}.detections.{eval_key}_iou"
+                bins = 10
+                counts, edges, other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
+                counts = np.asarray(counts)
+                edges = np.asarray(edges)
+
+                left_edges = edges[:-1]
+                widths = edges[1:] - edges[:-1]
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}_iou",
+                    "x": left_edges.tolist(),
+                    "y": counts.tolist(),
+                    "type": "bar",
+                    "width": widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.iou",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                tp = np.array(ctx.dataset.values(f"{eval_key}_tp"))
+                fp = np.array(ctx.dataset.values(f"{eval_key}_fp"))
+                fn = np.array(ctx.dataset.values(f"{eval_key}_fn"))
+
+                p = tp / (tp + fp)
+                p = np.nan_to_num(p, nan=0.0)
+                r = tp / (tp + fn)
+                r = np.nan_to_num(r, nan=0.0)
+                f1 = 2 * (p * r) / (p + r)
+                f1 = np.nan_to_num(f1, nan=0.0)
+
+                p_left_edges, p_counts, p_widths = compute_histogram(p, 10)
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": p_left_edges.tolist(),
+                    "y": p_counts.tolist(),
+                    "type": "bar",
+                    "width": p_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.precision",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                r_left_edges, r_counts, r_widths = compute_histogram(r, 10)
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": r_left_edges.tolist(),
+                    "y": r_counts.tolist(),
+                    "type": "bar",
+                    "width": r_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.recall",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                f1_left_edges, f1_counts, f1_widths = compute_histogram(f1, 10)
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": f1_left_edges.tolist(),
+                    "y": f1_counts.tolist(),
+                    "type": "bar",
+                    "width": f1_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.f1",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                p_class_list = []
+                r_class_list = []
+                f1_class_list = []
+                conf_class_list = []
+                for cls in classes:
+                    tp = sum(
+                        sublist.count("tp")
+                        for sublist in ctx.dataset.filter_labels(
+                            pred_field, F("label").is_in([cls])
+                        ).values(f"{pred_field}.detections.{eval_key}")
+                    )
+                    fp = sum(
+                        sublist.count("fp")
+                        for sublist in ctx.dataset.filter_labels(
+                            pred_field, F("label").is_in([cls])
+                        ).values(f"{pred_field}.detections.{eval_key}")
+                    )
+                    fn = sum(
+                        sublist.count("fn")
+                        for sublist in ctx.dataset.filter_labels(
+                            gt_field, F("label").is_in([cls])
+                        ).values(f"{gt_field}.detections.{eval_key}")
+                    )
+
+                    conf_total = [
+                        item
+                        for sublist in ctx.dataset.filter_labels(
+                            pred_field, F("label").is_in([cls])
+                        ).values(f"{pred_field}.detections.confidence")
+                        for item in sublist
+                    ]
+
+                    conf = sum(conf_total) / len(conf_total)
+
+                    p = tp / (tp + fp)
+                    p = np.nan_to_num(p, nan=0.0)
+                    r = tp / (tp + fn)
+                    r = np.nan_to_num(r, nan=0.0)
+                    f1 = 2 * (p * r) / (p + r)
+                    f1 = np.nan_to_num(f1, nan=0.0)
+
+                    p_class_list.append(p)
+                    r_class_list.append(r)
+                    f1_class_list.append(f1)
+                    conf_class_list.append(conf)
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": conf_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.conf_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": p_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.p_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": r_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.r_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": f1_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.f1_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+                confusion_matrix, labels, ids = results._confusion_matrix(
+                include_other=False,
+                include_missing=True,
+                )
+                # confusion_matrix = list(map(list, zip(confusion_matrix)))
+
+                cm_data = {
+                    "z": confusion_matrix,
+                    "x": labels,
+                    "y": labels,
+                    "type": "heatmap",
+                }
+                ctx.panel.set_data(
+                    "my_stack.cm",
+                    [
+                        # trace
+                        cm_data,
+                    ],
+                )
+            elif eval_type == "classification":
+                classes = ctx.dataset.distinct(f"{pred_field}.label")
+
+                x = f"{pred_field}.confidence"
+                bins = 10
+                counts, edges, other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
+                counts = np.asarray(counts)
+                edges = np.asarray(edges)
+
+                left_edges = edges[:-1]
+                widths = edges[1:] - edges[:-1]
+                histogram_data = {
+                    "name": f"{pred_field}.confidence",
+                    "x": left_edges.tolist(),
+                    "ids": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"],
+                    "y": counts.tolist(),
+                    "type": "bar",
+                    "width": widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.confidence",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                p_class_list = []
+                r_class_list = []
+                f1_class_list = []
+                conf_class_list = []
+                for cls in classes:
+                    tp = (
+                        ctx.dataset.filter_labels(pred_field, F("label").is_in([cls]))
+                        .values(f"{eval_key}")
+                        .count(True)
+                    )
+                    fp = (
+                        ctx.dataset.filter_labels(pred_field, F("label").is_in([cls]))
+                        .values(f"{eval_key}")
+                        .count(False)
+                    )
+                    fn = (
+                        ctx.dataset.filter_labels(gt_field, F("label").is_in([cls]))
+                        .values(f"{eval_key}")
+                        .count(False)
+                    )
+                    conf_total = ctx.dataset.filter_labels(
+                        pred_field, F("label").is_in([cls])
+                    ).values(f"{pred_field}.confidence")
+
+                    conf = sum(conf_total) / len(conf_total)
+
+                    p = tp / (tp + fp)
+                    p = np.nan_to_num(p, nan=0.0)
+                    r = tp / (tp + fn)
+                    r = np.nan_to_num(r, nan=0.0)
+                    f1 = 2 * (p * r) / (p + r)
+                    f1 = np.nan_to_num(f1, nan=0.0)
+
+                    p_class_list.append(p)
+                    r_class_list.append(r)
+                    f1_class_list.append(f1)
+                    conf_class_list.append(conf)
+
+                histogram_data = {
+                    "name": f"{pred_field}.confidence",
+                    "x": classes,
+                    "y": conf_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.conf_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+                histogram_data = {
+                    "name": f"{pred_field}.{eval_key}",
+                    "x": classes,
+                    "y": p_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.p_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.{eval_key}",
+                    "x": classes,
+                    "y": r_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.r_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.{eval_key}",
+                    "x": classes,
+                    "y": f1_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.f1_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                confusion_matrix, labels, ids = results._confusion_matrix(
+                    include_other=False,
+                    include_missing=False,
+                )
+                # confusion_matrix = list(map(list, zip(confusion_matrix)))
+
+                cm_data = {
+                    "z": confusion_matrix,
+                    "x": labels,
+                    "y": labels,
+                    "type": "heatmap",
+                }
+                ctx.panel.set_data(
+                    "my_stack.cm",
+                    [
+                        # trace
+                        cm_data,
+                    ],
+                )
+        else:
+            c_info = ctx.dataset.get_evaluation_info(compare_key).serialize()
+            c_results = ctx.dataset.load_evaluation_results(compare_key)
+            c_pred_field = c_info["config"]["pred_field"]
+            c_gt_field = c_info["config"]["gt_field"]
+
+            if eval_type == "detection":
+                classes = ctx.dataset.distinct(f"{pred_field}.detections.label")
+                c_classes = ctx.dataset.distinct(f"{c_pred_field}.detections.label")
+
+                bins = 10
+                x = f"{pred_field}.detections.confidence"
+                counts, edges, other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
+
+                x = f"{c_pred_field}.detections.confidence"
+                c_counts, c_edges, c_other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
+
+                counts = np.asarray(counts)
+                edges = np.asarray(edges)
+                c_counts = np.asarray(c_counts)
+                c_edges = np.asarray(c_edges)
+
+                left_edges = edges[:-1]
+                widths = edges[1:] - edges[:-1]
+                c_left_edges = c_edges[:-1]
+                c_widths = c_edges[1:] - c_edges[:-1]
+                histogram_data = {
+                    "name": f"{pred_field}.detections.confidence",
+                    "x": left_edges.tolist(),
+                    "y": counts.tolist(),
+                    "width": widths.tolist(),
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.confidence",
+                    "x": c_left_edges.tolist(),
+                    "y": c_counts.tolist(),
+                    "width": c_widths.tolist(),
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.confidence",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                bins = 10
+                x = f"{pred_field}.detections.{eval_key}_iou"
+                counts, edges, other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
+
+                x = f"{c_pred_field}.detections.{compare_key}_iou"
+                c_counts, c_edges, c_other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
+
+                counts = np.asarray(counts)
+                edges = np.asarray(edges)
+                c_counts = np.asarray(c_counts)
+                c_edges = np.asarray(c_edges)
+
+                left_edges = edges[:-1]
+                widths = edges[1:] - edges[:-1]
+                c_left_edges = c_edges[:-1]
+                c_widths = c_edges[1:] - c_edges[:-1]
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}_iou",
+                    "x": left_edges.tolist(),
+                    "y": counts.tolist(),
+                    "width": widths.tolist(),
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}_iou",
+                    "x": c_left_edges.tolist(),
+                    "y": c_counts.tolist(),
+                    "width": c_widths.tolist(),
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.iou",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                tp = np.array(ctx.dataset.values(f"{eval_key}_tp"))
+                fp = np.array(ctx.dataset.values(f"{eval_key}_fp"))
+                fn = np.array(ctx.dataset.values(f"{eval_key}_fn"))
+
+                c_tp = np.array(ctx.dataset.values(f"{compare_key}_tp"))
+                c_fp = np.array(ctx.dataset.values(f"{compare_key}_fp"))
+                c_fn = np.array(ctx.dataset.values(f"{compare_key}_fn"))
+
+                p = tp / (tp + fp)
+                p = np.nan_to_num(p, nan=0.0)
+                r = tp / (tp + fn)
+                r = np.nan_to_num(r, nan=0.0)
+                f1 = 2 * (p * r) / (p + r)
+                f1 = np.nan_to_num(f1, nan=0.0)
+
+                c_p = c_tp / (c_tp + c_fp)
+                c_p = np.nan_to_num(c_p, nan=0.0)
+                c_r = c_tp / (c_tp + c_fn)
+                c_r = np.nan_to_num(c_r, nan=0.0)
+                c_f1 = 2 * (c_p * c_r) / (c_p + c_r)
+                c_f1 = np.nan_to_num(c_f1, nan=0.0)
+
+                p_left_edges, p_counts, p_widths = compute_histogram(p, 10)
+                c_p_left_edges, c_p_counts, c_p_widths = compute_histogram(c_p, 10)
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": p_left_edges.tolist(),
+                    "y": p_counts.tolist(),
+                    "type": "bar",
+                    "width": p_widths.tolist(),
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}",
+                    "x": c_p_left_edges.tolist(),
+                    "y": c_p_counts.tolist(),
+                    "type": "bar",
+                    "width": c_p_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.precision",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                r_left_edges, r_counts, r_widths = compute_histogram(r, 10)
+                c_r_left_edges, c_r_counts, c_r_widths = compute_histogram(c_r, 10)
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": r_left_edges.tolist(),
+                    "y": r_counts.tolist(),
+                    "type": "bar",
+                    "width": r_widths.tolist(),
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}",
+                    "x": c_r_left_edges.tolist(),
+                    "y": c_r_counts.tolist(),
+                    "type": "bar",
+                    "width": c_r_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.recall",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                f1_left_edges, f1_counts, f1_widths = compute_histogram(f1, 10)
+                c_f1_left_edges, c_f1_counts, c_f1_widths = compute_histogram(c_f1, 10)
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": f1_left_edges.tolist(),
+                    "y": f1_counts.tolist(),
+                    "type": "bar",
+                    "width": f1_widths.tolist(),
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}",
+                    "x": c_f1_left_edges.tolist(),
+                    "y": c_f1_counts.tolist(),
+                    "type": "bar",
+                    "width": c_f1_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.f1",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                p_class_list = []
+                r_class_list = []
+                f1_class_list = []
+                conf_class_list = []
+
+                c_p_class_list = []
+                c_r_class_list = []
+                c_f1_class_list = []
+                c_conf_class_list = []
+
+                for cls in classes:
+                    tp = sum(
+                        sublist.count("tp")
+                        for sublist in ctx.dataset.filter_labels(
+                            pred_field, F("label").is_in([cls])
+                        ).values(f"{pred_field}.detections.{eval_key}")
+                    )
+                    fp = sum(
+                        sublist.count("fp")
+                        for sublist in ctx.dataset.filter_labels(
+                            pred_field, F("label").is_in([cls])
+                        ).values(f"{pred_field}.detections.{eval_key}")
+                    )
+                    fn = sum(
+                        sublist.count("fn")
+                        for sublist in ctx.dataset.filter_labels(
+                            gt_field, F("label").is_in([cls])
+                        ).values(f"{gt_field}.detections.{eval_key}")
+                    )
+
+                    conf_total = [
+                        item
+                        for sublist in ctx.dataset.filter_labels(
+                            pred_field, F("label").is_in([cls])
+                        ).values(f"{pred_field}.detections.confidence")
+                        for item in sublist
+                    ]
+
+                    conf = sum(conf_total) / len(conf_total)
+
+                    p = tp / (tp + fp)
+                    p = np.nan_to_num(p, nan=0.0)
+                    r = tp / (tp + fn)
+                    r = np.nan_to_num(r, nan=0.0)
+                    f1 = 2 * (p * r) / (p + r)
+                    f1 = np.nan_to_num(f1, nan=0.0)
+
+                    p_class_list.append(p)
+                    r_class_list.append(r)
+                    f1_class_list.append(f1)
+                    conf_class_list.append(conf)
+
+                    if cls not in c_classes:
+                        p_class_list.append(None)
+                        r_class_list.append(None)
+                        f1_class_list.append(None)
+                        conf_class_list.append(None)
+                    else:
+                        c_tp = sum(
+                            sublist.count("tp")
+                            for sublist in ctx.dataset.filter_labels(
+                                c_pred_field, F("label").is_in([cls])
+                            ).values(f"{c_pred_field}.detections.{compare_key}")
+                        )
+                        c_fp = sum(
+                            sublist.count("fp")
+                            for sublist in ctx.dataset.filter_labels(
+                                c_pred_field, F("label").is_in([cls])
+                            ).values(f"{c_pred_field}.detections.{compare_key}")
+                        )
+                        c_fn = sum(
+                            sublist.count("fn")
+                            for sublist in ctx.dataset.filter_labels(
+                                c_gt_field, F("label").is_in([cls])
+                            ).values(f"{c_gt_field}.detections.{compare_key}")
+                        )
+
+                        c_conf_total = [
+                            item
+                            for sublist in ctx.dataset.filter_labels(
+                                c_pred_field, F("label").is_in([cls])
+                            ).values(f"{c_pred_field}.detections.confidence")
+                            for item in sublist
+                        ]
+
+                        c_conf = sum(c_conf_total) / len(c_conf_total)
+
+                        c_p = c_tp / (c_tp + c_fp)
+                        c_p = np.nan_to_num(c_p, nan=0.0)
+                        c_r = c_tp / (c_tp + c_fn)
+                        c_r = np.nan_to_num(c_r, nan=0.0)
+                        c_f1 = 2 * (c_p * c_r) / (c_p + c_r)
+                        c_f1 = np.nan_to_num(c_f1, nan=0.0)
+
+                        c_p_class_list.append(c_p)
+                        c_r_class_list.append(c_r)
+                        c_f1_class_list.append(c_f1)
+                        c_conf_class_list.append(c_conf)
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": conf_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}",
+                    "x": classes,
+                    "y": c_conf_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.conf_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": p_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{gt_field}.detections.{compare_key}",
+                    "x": classes,
+                    "y": c_p_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.p_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": r_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}",
+                    "x": classes,
+                    "y": c_r_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.r_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": f1_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}",
+                    "x": classes,
+                    "y": c_f1_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.f1_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+                confusion_matrix, labels, ids = results._confusion_matrix(
+                include_other=False,
+                include_missing=True,
+                )
+                # confusion_matrix = list(map(list, zip(confusion_matrix)))
+
+                cm_data = {
+                    "z": confusion_matrix,
+                    "x": labels,
+                    "y": labels,
+                    "type": "heatmap",
+                }
+
+                c_confusion_matrix, c_labels, c_ids = c_results._confusion_matrix(
+                    include_other=False,
+                    include_missing=True,
+                )
+                # c_confusion_matrix = list(map(list, zip(c_confusion_matrix)))
+
+                c_cm_data = {
+                    "z": c_confusion_matrix,
+                    "x": c_labels,
+                    "y": c_labels,
+                    "type": "heatmap",
+                }
+                ctx.panel.set_data(
+                    "my_stack.cm",
+                    [
+                        # trace
+                        cm_data,
+                    ],
+                )
+                ctx.panel.set_data(
+                    "my_stack.c_cm",
+                    [
+                        # trace
+                        c_cm_data,
+                    ],
+                )
+            elif eval_type == "classification":
+                classes = ctx.dataset.distinct(f"{pred_field}.label")
+                c_classes = ctx.dataset.distinct(f"{c_pred_field}.label")
+
+                x = f"{pred_field}.confidence"
+                bins = 10
+                counts, edges, other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
+                counts = np.asarray(counts)
+                edges = np.asarray(edges)
+
+                x = f"{c_pred_field}.confidence"
+
+                left_edges = edges[:-1]
+                widths = edges[1:] - edges[:-1]
+                histogram_data = {
+                    "name": f"{pred_field}.confidence",
+                    "x": left_edges.tolist(),
+                    "ids": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"],
+                    "y": counts.tolist(),
+                    "type": "bar",
+                    "width": widths.tolist(),
+                }
+
+                c_x = f"{c_pred_field}.confidence"
+                c_bins = 10
+                c_counts, c_edges, c_other = ctx.dataset.histogram_values(
+                    c_x,
+                    bins=c_bins,
+                )
+                c_counts = np.asarray(c_counts)
+                c_edges = np.asarray(c_edges)
+
+                c_left_edges = c_edges[:-1]
+                c_widths = c_edges[1:] - c_edges[:-1]
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.confidence",
+                    "x": c_left_edges.tolist(),
+                    "ids": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"],
+                    "y": c_counts.tolist(),
+                    "type": "bar",
+                    "width": c_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.confidence",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                p_class_list = []
+                r_class_list = []
+                f1_class_list = []
+                conf_class_list = []
+
+                c_p_class_list = []
+                c_r_class_list = []
+                c_f1_class_list = []
+                c_conf_class_list = []
+                for cls in classes:
+                    tp = (
+                        ctx.dataset.filter_labels(pred_field, F("label").is_in([cls]))
+                        .values(f"{eval_key}")
+                        .count(True)
+                    )
+                    fp = (
+                        ctx.dataset.filter_labels(pred_field, F("label").is_in([cls]))
+                        .values(f"{eval_key}")
+                        .count(False)
+                    )
+                    fn = (
+                        ctx.dataset.filter_labels(gt_field, F("label").is_in([cls]))
+                        .values(f"{eval_key}")
+                        .count(False)
+                    )
+                    conf_total = ctx.dataset.filter_labels(
+                        pred_field, F("label").is_in([cls])
+                    ).values(f"{pred_field}.confidence")
+
+                    conf = sum(conf_total) / len(conf_total)
+
+                    p = tp / (tp + fp)
+                    p = np.nan_to_num(p, nan=0.0)
+                    r = tp / (tp + fn)
+                    r = np.nan_to_num(r, nan=0.0)
+                    f1 = 2 * (p * r) / (p + r)
+                    f1 = np.nan_to_num(f1, nan=0.0)
+
+                    p_class_list.append(p)
+                    r_class_list.append(r)
+                    f1_class_list.append(f1)
+                    conf_class_list.append(conf)
+
+                    if cls not in c_classes:
+                        p_class_list.append(None)
+                        r_class_list.append(None)
+                        f1_class_list.append(None)
+                        conf_class_list.append(None)
+                    else:
+                        c_tp = (
+                            ctx.dataset.filter_labels(
+                                c_pred_field, F("label").is_in([cls])
+                            )
+                            .values(f"{compare_key}")
+                            .count(True)
+                        )
+                        c_fp = (
+                            ctx.dataset.filter_labels(
+                                c_pred_field, F("label").is_in([cls])
+                            )
+                            .values(f"{compare_key}")
+                            .count(False)
+                        )
+                        c_fn = (
+                            ctx.dataset.filter_labels(gt_field, F("label").is_in([cls]))
+                            .values(f"{compare_key}")
+                            .count(False)
+                        )
+                        c_conf_total = ctx.dataset.filter_labels(
+                            c_pred_field, F("label").is_in([cls])
+                        ).values(f"{c_pred_field}.confidence")
+
+                        c_conf = sum(c_conf_total) / len(c_conf_total)
+
+                        c_p = c_tp / (c_tp + c_fp)
+                        c_p = np.nan_to_num(c_p, nan=0.0)
+                        c_r = c_tp / (c_tp + c_fn)
+                        c_r = np.nan_to_num(c_r, nan=0.0)
+                        c_f1 = 2 * (c_p * c_r) / (c_p + c_r)
+                        c_f1 = np.nan_to_num(c_f1, nan=0.0)
+
+                        c_p_class_list.append(c_p)
+                        c_r_class_list.append(c_r)
+                        c_f1_class_list.append(c_f1)
+                        c_conf_class_list.append(c_conf)
+
+                histogram_data = {
+                    "name": f"{pred_field}.confidence",
+                    "x": classes,
+                    "y": conf_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.confidence",
+                    "x": c_classes,
+                    "y": c_conf_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.conf_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+                histogram_data = {
+                    "name": f"{pred_field}.{eval_key}",
+                    "x": classes,
+                    "y": p_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.{compare_key}",
+                    "x": classes,
+                    "y": c_p_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.p_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.{eval_key}",
+                    "x": classes,
+                    "y": r_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.{compare_key}",
+                    "x": classes,
+                    "y": c_r_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.r_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.{eval_key}",
+                    "x": classes,
+                    "y": f1_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.{compare_key}",
+                    "x": classes,
+                    "y": c_f1_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.f1_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                confusion_matrix, labels, ids = results._confusion_matrix(
+                    include_other=False,
+                    include_missing=False,
+                )
+                # confusion_matrix = list(map(list, zip(confusion_matrix)))
+
+                cm_data = {
+                    "z": confusion_matrix,
+                    "x": labels,
+                    "y": labels,
+                    "type": "heatmap",
+                }
+
+                c_confusion_matrix, c_labels, c_ids = c_results._confusion_matrix(
+                    include_other=False,
+                    include_missing=False,
+                )
+                # c_confusion_matrix = list(map(list, zip(c_confusion_matrix)))
+
+                c_cm_data = {
+                    "z": c_confusion_matrix,
+                    "x": c_labels,
+                    "y": c_labels,
+                    "type": "heatmap",
+                }
+                ctx.panel.set_data(
+                    "my_stack.cm",
+                    [
+                        # trace
+                        cm_data,
+                    ],
+                )
+                ctx.panel.set_data(
+                    "my_stack.c_cm",
+                    [
+                        # trace
+                        c_cm_data,
+                    ],
+                )
+
+    def _add_plots(self, ctx, stack):
+        eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+
+        current_eval = ctx.dataset.get_evaluation_info(eval_key).serialize()
+
+        config = {"scrollZoom": False}
+        layout = {
+            "title": "Confidence",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {"title": "Confidence"},
+            "yaxis": {"title": "Count"},
+            "showlegend": True,
+            "legend": {"x": 0, "y": 1, "showlegend": True},
+        }
+        stack.add_property(
+            "confidence",
+            types.Property(
+                types.List(types.Object()),
+                view=types.PlotlyView(
+                    config=config,
+                    layout=layout,
+                    on_click=self.on_numerical_click,
+                    on_selected=self.on_numerical_click,
+                ),
+            ),
+        )
+
+        if current_eval["config"]["type"] != "classification":
+            config = {"scrollZoom": False}
+            layout = {
+                "title": "IOU",
+                "bargap": 0,
+                "bargroupgap": 0,
+                "xaxis": {"title": "IOU"},
+                "yaxis": {"title": "Count"},
+                "showlegend": True,
+                "legend": {"x": 0, "y": 1, "showlegend": True},
+            }
+            stack.add_property(
+                "iou",
+                types.Property(
+                    types.List(types.Object()),
+                    view=types.PlotlyView(
+                        config=config, layout=layout, on_click=self.on_numerical_click
+                    ),
+                ),
+            )
+
+            config = {"scrollZoom": False}
+            layout = {
+                "title": "Precision Distribution",
+                "bargap": 0,
+                "bargroupgap": 0,
+                "xaxis": {"title": "Precision per Sample"},
+                "yaxis": {"title": "Count"},
+                "showlegend": True,
+                "legend": {"x": 0, "y": 1, "showlegend": True},
+            }
+            stack.add_property(
+                "precision",
+                types.Property(
+                    types.List(types.Object()),
+                    view=types.PlotlyView(
+                        config=config, layout=layout, on_click=self.on_numerical_click
+                    ),
+                ),
+            )
+
+            config = {"scrollZoom": False}
+            layout = {
+                "title": "Recall Distribution",
+                "bargap": 0,
+                "bargroupgap": 0,
+                "xaxis": {"title": "Recall per Sample"},
+                "yaxis": {"title": "Count"},
+                "showlegend": True,
+                "legend": {"x": 0, "y": 1, "showlegend": True},
+            }
+            stack.add_property(
+                "recall",
+                types.Property(
+                    types.List(types.Object()),
+                    view=types.PlotlyView(
+                        config=config, layout=layout, on_click=self.on_numerical_click
+                    ),
+                ),
+            )
+
+            config = {"scrollZoom": False}
+            layout = {
+                "title": "F1-Score Distribution",
+                "bargap": 0,
+                "bargroupgap": 0,
+                "xaxis": {"title": "F1-Score per Sample"},
+                "yaxis": {"title": "Count"},
+                "showlegend": True,
+                "legend": {"x": 0, "y": 1, "showlegend": True},
+            }
+            stack.add_property(
+                "f1",
+                types.Property(
+                    types.List(types.Object()),
+                    view=types.PlotlyView(
+                        config=config, layout=layout, on_click=self.on_numerical_click
+                    ),
+                ),
+            )
+
+        config = {"scrollZoom": False}
+        layout = {
+            "title": "Confidence per Class",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {"title": "Class"},
+            "yaxis": {"title": "Confidence"},
+            "showlegend": True,
+            "legend": {"x": 0, "y": 1, "showlegend": True},
+        }
+        stack.add_property(
+            "conf_class",
+            types.Property(
+                types.List(types.Object()),
+                view=types.PlotlyView(
+                    config=config, layout=layout, on_click=self.on_categorical_click
+                ),
+            ),
+        )
+        config = {"scrollZoom": False}
+        layout = {
+            "title": "Precision per Class",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {"title": "Class"},
+            "yaxis": {"title": "Precision"},
+            "showlegend": True,
+            "legend": {"x": 0, "y": 1, "showlegend": True},
+        }
+        stack.add_property(
+            "p_class",
+            types.Property(
+                types.List(types.Object()),
+                view=types.PlotlyView(
+                    config=config, layout=layout, on_click=self.on_categorical_click
+                ),
+            ),
+        )
+
+        config = {"scrollZoom": False}
+        layout = {
+            "title": "Recall per Class",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {"title": "Class"},
+            "yaxis": {"title": "Recall"},
+            "showlegend": True,
+            "legend": {"x": 0, "y": 1, "showlegend": True},
+        }
+        stack.add_property(
+            "r_class",
+            types.Property(
+                types.List(types.Object()),
+                view=types.PlotlyView(
+                    config=config, layout=layout, on_click=self.on_categorical_click
+                ),
+            ),
+        )
+
+        config = {"scrollZoom": False}
+        layout = {
+            "title": "F1-Score per Class",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {"title": "Class"},
+            "yaxis": {"title": "F1-Score"},
+            "showlegend": True,
+            "legend": {"x": 0, "y": 1, "showlegend": True},
+        }
+        stack.add_property(
+            "f1_class",
+            types.Property(
+                types.List(types.Object()),
+                view=types.PlotlyView(
+                    config=config, layout=layout, on_click=self.on_categorical_click
+                ),
+            ),
+        )
+
+        config = {}
+        layout = {
+            "title": f"Confusion Matrix for {eval_key}",
+            "yaxis": {"fixedrange": True, "title": "Ground truth"},
+            "xaxis": {"fixedrange": True, "title": "Model predictions"},
+        }
+
+        stack.add_property(
+            "cm",
+            types.Property(
+                types.List(types.Object()),
+                view=types.PlotlyView(
+                    config=config, layout=layout, on_click=self.on_cm_click
+                ),
+            ),
+        )
+
+        compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key", None)
+        if compare_key is not None:
+            config = {}
+            layout = {
+                "title": f"Confusion Matrix for {compare_key}",
+                "yaxis": {"fixedrange": True, "title": "Ground truth"},
+                "xaxis": {"fixedrange": True, "title": "Model predictions"},
+            }
+
+            stack.add_property(
+                "c_cm",
+                types.Property(
+                    types.List(types.Object()),
+                    view=types.PlotlyView(
+                        config=config, layout=layout, on_click=self.on_cm_click
+                    ),
+                ),
+            )
+
 
 class EvalPlots(foo.Panel):
-
     @property
     def config(self):
-        return foo.PanelConfig(
-            name="eval_plots",
-            label="eval_plots"
-        )
-    
+        return foo.PanelConfig(name="eval_plots", label="eval_plots")
+
     # def on_change_view(self, ctx):
     #     print("View changed")
-    
+
     def on_load(self, ctx):
-
-        
-
         print("Panel loaded")
 
-
-    
     def render(self, ctx):
         panel = types.Object()
         # Define main stack
         stack = panel.v_stack("my_stack", align_x="center", gap=2)
 
-        stack.md("""
+        stack.md(
+            """
             ### Evaluate Plots
         """,
-        name="md1")
+            name="md1",
+        )
 
         # Create the eval key options for the menus
         eval_keys = types.Choices()
         for key in ctx.dataset.list_evaluations():
             eval_keys.add_choice(key, label=key)
 
-        menu = stack.menu('menu', variant="square", width=100, align_y="center")
-        actions = menu.btn_group('actions')
+        menu = stack.menu("menu", variant="square", width=100, align_y="center")
+        actions = menu.btn_group("actions")
 
         # Add Eval Key Menu
-        actions.enum('eval_key', label="Evaluation key", values=eval_keys.values(),  view=types.View(space=3), on_change=self.on_change_config,)
+        actions.enum(
+            "eval_key",
+            label="Evaluation key",
+            values=eval_keys.values(),
+            view=types.View(space=3),
+            on_change=self.on_change_config,
+        )
 
         compare_keys = eval_keys.values()
 
@@ -340,23 +1786,25 @@ class EvalPlots(foo.Panel):
         if ctx.panel.get_state("my_stack") != None:
             eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
             if eval_key != None:
-
                 # Remove active eval key from the compare list
                 compare_keys = eval_keys.values()
-                index = compare_keys.index(eval_key )
+                index = compare_keys.index(eval_key)
                 compare_keys.pop(index)
 
                 # Find the type of eval
                 current_eval = ctx.dataset.get_evaluation_info(eval_key)
                 eval_type = current_eval.config.type
 
-                self._add_plots(ctx,stack)
+                self._add_plots(ctx, stack)
 
-            
         # Add Compare Key menu
-        actions.enum('compare_key', label="Compare key", values=compare_keys,  view=types.View(space=3), on_change=self.on_change_config,)
-
-        
+        actions.enum(
+            "compare_key",
+            label="Compare key",
+            values=compare_keys,
+            view=types.View(space=3),
+            on_change=self.on_change_config,
+        )
 
         return types.Property(
             panel,
@@ -378,127 +1826,211 @@ class EvalPlots(foo.Panel):
         table_list = []
         self._update_plot_data(ctx)
 
-    def _update_plot_data(self, ctx,):
+    def on_numerical_click(self, ctx):
+        params = ctx.params
+        path = ctx.params.get("path")
+        plot = ctx.panel.get_state(path)
+
+        left_edge = params["range"][0]
+        right_edge = params["range"][1]
+
+        if "detections" in plot[0]["name"]:
+            eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+            compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key", None)
+            path = ctx.params.get("path")
+            info = ctx.dataset.get_evaluation_info(eval_key).serialize()
+            pred_field = info["config"]["pred_field"]
+            if len(plot) == 1:
+                view = ctx.dataset.filter_labels(
+                    pred_field, F(plot[0]["name"]) <= right_edge
+                ).filter_labels(pred_field, F(plot[0]["name"].split(".")[-1]) >= left_edge)
+                ctx.ops.set_view(view)
+            elif len(plot) == 2:
+                c_info = ctx.dataset.get_evaluation_info(compare_key).serialize()
+                c_pred_field = c_info["config"]["pred_field"]
+                view = (
+                    ctx.dataset.filter_labels(
+                        pred_field, F(plot[0]["name"].split(".")[-1]) <= right_edge
+                    )
+                    .filter_labels(pred_field, F(plot[0]["name"].split(".")[-1]) >= left_edge)
+                    .filter_labels(c_pred_field, F(plot[1]["name"].split(".")[-1]) <= right_edge)
+                    .filter_labels(c_pred_field, F(plot[1]["name"].split(".")[-1]) >= left_edge)
+                )
+                ctx.ops.set_view(view)
+            else:
+                raise Exception(plot)
+        else:
+            if len(plot) == 1:
+                view = ctx.dataset.match(F(plot[0]["name"]) <= right_edge).match(
+                    F(plot[0]["name"]) >= left_edge
+                )
+                ctx.ops.set_view(view)
+            elif len(plot) == 2:
+                view1 = ctx.dataset.match(F(plot[0]["name"]) <= right_edge).match(
+                    F(plot[0]["name"]) >= left_edge
+                )
+                view2 = ctx.dataset.match(F(plot[0]["name"]) <= right_edge).match(
+                    F(plot[0]["name"]) >= left_edge
+                )
+                view = view1.concat(view2)
+                ctx.ops.set_view(view)
+            else:
+                raise Exception(plot)
+
+    def on_categorical_click(self, ctx):
+        params = ctx.params
+        path = ctx.params.get("path")
+        plot = ctx.panel.get_state(path)
         eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+        compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key", None)
+        path = ctx.params.get("path")
+        info = ctx.dataset.get_evaluation_info(eval_key).serialize()
+        pred_field = info["config"]["pred_field"]
+
+        if compare_key is None:
+            view = ctx.dataset.filter_labels(
+                pred_field, F("label").is_in([params["x"]])
+            )
+            ctx.ops.set_view(view)
+        elif compare_key is not None:
+            c_info = ctx.dataset.get_evaluation_info(compare_key).serialize()
+            c_pred_field = c_info["config"]["pred_field"]
+
+            view1 = ctx.dataset.filter_labels(
+                pred_field, F("label").is_in([params["x"]])
+            )
+            view2 = ctx.dataset.filter_labels(
+                c_pred_field, F("label").is_in([params["x"]])
+            )
+            view = view1.concat(view2)
+            ctx.ops.set_view(view)
+        else:
+            raise Exception(plot)
+
+    def on_cm_click(self, ctx):
+        params = ctx.params
+        path = ctx.params.get("path")
+        plot = ctx.panel.get_state(path)
+        eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+        compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key", None)
+        path = ctx.params.get("path")
+        info = ctx.dataset.get_evaluation_info(eval_key).serialize()
+        pred_field = info["config"]["pred_field"]
+        gt_field = info["config"]["gt_field"]
+        eval_type = info["config"]["type"]
+
+        if "c_cm" not in path:
+            if params["x"] == "(none)":
+                view = ctx.dataset.filter_labels(
+                gt_field, F("label").is_in([params["y"]])
+            ).filter_labels(
+                gt_field, F(eval_key).is_in(["fn"])
+            )
+            elif params["y"] == "(none)":
+                view = ctx.dataset.filter_labels(
+                pred_field, F("label").is_in([params["x"]])
+            ).filter_labels(
+                pred_field, F(eval_key).is_in(["fp"])
+            )
+            else:
+                view = ctx.dataset.filter_labels(
+                    gt_field, F("label").is_in([params["y"]])
+                ).filter_labels(pred_field, F("label").is_in([params["x"]]))
+            ctx.ops.set_view(view)
+        else:
+            c_info = ctx.dataset.get_evaluation_info(compare_key).serialize()
+            c_pred_field = c_info["config"]["pred_field"]
+            c_gt_field = c_info["config"]["gt_field"]
+            if params["x"] == "(none)":
+                view = ctx.dataset.filter_labels(
+                c_gt_field, F("label").is_in([params["y"]])
+            ).filter_labels(
+                c_gt_field, F(eval_key).is_in(["fn"])
+            )
+            elif params["y"] == "(none)":
+                view = ctx.dataset.filter_labels(
+                c_pred_field, F("label").is_in([params["x"]])
+            ).filter_labels(
+                c_pred_field, F(eval_key).is_in(["fp"])
+            )
+            else:
+                view = ctx.dataset.filter_labels(
+                c_gt_field, F("label").is_in([params["y"]])
+            ).filter_labels(c_pred_field, F("label").is_in([params["x"]]))
+            ctx.ops.set_view(view)
+
+    def _update_plot_data(
+        self,
+        ctx,
+    ):
+        eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+        compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key", None)
+        path = ctx.params.get("path")
         info = ctx.dataset.get_evaluation_info(eval_key).serialize()
         results = ctx.dataset.load_evaluation_results(eval_key)
         pred_field = info["config"]["pred_field"]
         gt_field = info["config"]["gt_field"]
-        
+        eval_type = info["config"]["type"]
+        if compare_key is None:
+            if eval_type != "classification":
+                classes = ctx.dataset.distinct(f"{pred_field}.detections.label")
 
-        if info["config"]["type"] != "classification":
+                x = f"{pred_field}.detections.confidence"
+                bins = 10
+                counts, edges, other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
+                counts = np.asarray(counts)
+                edges = np.asarray(edges)
 
-            classes = ctx.dataset.distinct(f"{pred_field}.detections.label")
+                left_edges = edges[:-1]
+                widths = edges[1:] - edges[:-1]
+                histogram_data = {
+                    "name": f"{pred_field}.detections.confidence",
+                    "x": left_edges.tolist(),
+                    "y": counts.tolist(),
+                    "ids": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"],
+                    "type": "bar",
+                    "width": widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.confidence",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
 
-            x = f"{pred_field}.detections.confidence"
-            bins = 10
-            counts, edges, other = ctx.view.histogram_values(
-                x,
-                bins=bins,
-            )
-            counts = np.asarray(counts)
-            edges = np.asarray(edges)
-            
-            left_edges = edges[:-1]
-            widths = edges[1:] - edges[:-1]
-            histogram_data = {
-                "name": f"{pred_field}.detections.confidence",
-                'x': left_edges.tolist(),
-                'y': counts.tolist(),
-                'ids': ["01","02","03","04","05","06","07","08","09", "10"],
-                'type': 'bar',
-                'width': widths.tolist()
-            }
-            ctx.panel.set_data('my_stack.confidence', [
-                # trace
-                histogram_data,
-            ])
+                x = f"{pred_field}.detections.{eval_key}_iou"
+                bins = 10
+                counts, edges, other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
+                counts = np.asarray(counts)
+                edges = np.asarray(edges)
 
-            x = f"{pred_field}.detections.{eval_key}_iou"
-            bins = 10
-            counts, edges, other = ctx.view.histogram_values(
-                x,
-                bins=bins,
-            )
-            counts = np.asarray(counts)
-            edges = np.asarray(edges)
-            
-            left_edges = edges[:-1]
-            widths = edges[1:] - edges[:-1]
-            histogram_data = {
-                "name": f"{pred_field}.detections.{eval_key}_iou",
-                'x': left_edges.tolist(),
-                'y': counts.tolist(),
-                'type': 'bar',
-                'width': widths.tolist()
-            }
-            ctx.panel.set_data('my_stack.iou', [
-                # trace
-                histogram_data,
-            ])
+                left_edges = edges[:-1]
+                widths = edges[1:] - edges[:-1]
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}_iou",
+                    "x": left_edges.tolist(),
+                    "y": counts.tolist(),
+                    "type": "bar",
+                    "width": widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.iou",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
 
-            tp = np.array(ctx.dataset.values(f"{eval_key}_tp"))
-            fp = np.array(ctx.dataset.values(f"{eval_key}_fp"))
-            fn = np.array(ctx.dataset.values(f"{eval_key}_fn"))
-
-            p = tp / (tp + fp)
-            p = np.nan_to_num(p, nan=0.0)
-            r = tp / (tp + fn)
-            r = np.nan_to_num(r, nan=0.0)
-            f1 = 2 * (p * r) / (p + r)
-            f1 = np.nan_to_num(f1, nan=0.0)
-
-            p_left_edges, p_counts, p_widths = compute_histogram(p,10)
-
-            histogram_data = {
-                "name": f"{pred_field}.detections.{eval_key}",
-                'x': p_left_edges.tolist(),
-                'y': p_counts.tolist(),
-                'type': 'bar',
-                'width': p_widths.tolist()
-            }
-            ctx.panel.set_data('my_stack.precision', [
-                # trace
-                histogram_data,
-            ])
-
-            r_left_edges, r_counts, r_widths = compute_histogram(r,10)
-
-            histogram_data = {
-                "name": f"{pred_field}.detections.{eval_key}",
-                'x': r_left_edges.tolist(),
-                'y': r_counts.tolist(),
-                'type': 'bar',
-                'width': r_widths.tolist()
-            }
-            ctx.panel.set_data('my_stack.recall', [
-                # trace
-                histogram_data,
-            ])
-
-            f1_left_edges, f1_counts, f1_widths = compute_histogram(f1,10)
-
-            histogram_data = {
-                "name": f"{pred_field}.detections.{eval_key}",
-                'x': f1_left_edges.tolist(),
-                'y': f1_counts.tolist(),
-                'type': 'bar',
-                'width': f1_widths.tolist()
-            }
-            ctx.panel.set_data('my_stack.f1', [
-                # trace
-                histogram_data,
-           ])
-            
-            p_class_list = []
-            r_class_list = []
-            f1_class_list = []
-            for cls in classes:
-
-                tp = sum(sublist.count("tp") for sublist in ctx.dataset.filter_labels(pred_field, F("label").is_in([cls])).values(f"{pred_field}.detections.{eval_key}"))
-                fp = sum(sublist.count("fp") for sublist in ctx.dataset.filter_labels(pred_field, F("label").is_in([cls])).values(f"{pred_field}.detections.{eval_key}"))
-                fn = sum(sublist.count("fn") for sublist in ctx.dataset.filter_labels(gt_field, F("label").is_in([cls])).values(f"{gt_field}.detections.{eval_key}"))
-
+                tp = np.array(ctx.dataset.values(f"{eval_key}_tp"))
+                fp = np.array(ctx.dataset.values(f"{eval_key}_fp"))
+                fn = np.array(ctx.dataset.values(f"{eval_key}_fn"))
 
                 p = tp / (tp + fp)
                 p = np.nan_to_num(p, nan=0.0)
@@ -506,452 +2038,1268 @@ class EvalPlots(foo.Panel):
                 r = np.nan_to_num(r, nan=0.0)
                 f1 = 2 * (p * r) / (p + r)
                 f1 = np.nan_to_num(f1, nan=0.0)
-            
-                p_class_list.append(p)
-                r_class_list.append(r)
-                f1_class_list.append(f1)
-            
-            histogram_data = {
-                "name": f"{pred_field}.detections.{eval_key}",
-                'x': classes,
-                'y': p_class_list,
-                'type': 'bar',
-            }
-            ctx.panel.set_data('my_stack.p_class', [
-                # trace
-                histogram_data,
-            ])
 
-            histogram_data = {
-                "name": f"{pred_field}.detections.{eval_key}",
-                'x': classes,
-                'y': r_class_list,
-                'type': 'bar',
-            }
-            ctx.panel.set_data('my_stack.r_class', [
-                # trace
-                histogram_data,
-            ])
+                p_left_edges, p_counts, p_widths = compute_histogram(p, 10)
 
-            histogram_data = {
-                "name": f"{pred_field}.detections.{eval_key}",
-                'x': classes,
-                'y': f1_class_list,
-                'type': 'bar',
-            }
-            ctx.panel.set_data('my_stack.f1_class', [
-                # trace
-                histogram_data,
-            ])
-        elif  info["config"]["type"] == "classification":
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": p_left_edges.tolist(),
+                    "y": p_counts.tolist(),
+                    "type": "bar",
+                    "width": p_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.precision",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
 
-            classes = ctx.dataset.distinct(f"{pred_field}.label")
+                r_left_edges, r_counts, r_widths = compute_histogram(r, 10)
 
-            x = f"{pred_field}.confidence"
-            bins = 10
-            counts, edges, other = ctx.view.histogram_values(
-                x,
-                bins=bins,
-            )
-            counts = np.asarray(counts)
-            edges = np.asarray(edges)
-            
-            left_edges = edges[:-1]
-            widths = edges[1:] - edges[:-1]
-            histogram_data = {
-                "name": f"{pred_field}.confidence",
-                'x': left_edges.tolist(),
-                'ids': ["01","02","03","04","05","06","07","08","09", "10"],
-                'y': counts.tolist(),
-                'type': 'bar',
-                'width': widths.tolist()
-            }
-            ctx.panel.set_data('my_stack.confidence', [
-                # trace
-                histogram_data,
-            ])
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": r_left_edges.tolist(),
+                    "y": r_counts.tolist(),
+                    "type": "bar",
+                    "width": r_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.recall",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
 
-            p_class_list = []
-            r_class_list = []
-            f1_class_list = []
-            conf_class_list = []
-            for cls in classes:
+                f1_left_edges, f1_counts, f1_widths = compute_histogram(f1, 10)
 
-                tp = ctx.dataset.filter_labels(pred_field, F("label").is_in([cls])).values(f"{eval_key}").count(True)
-                fp = ctx.dataset.filter_labels(pred_field, F("label").is_in([cls])).values(f"{eval_key}").count(False)
-                fn = ctx.dataset.filter_labels(gt_field, F("label").is_in([cls])).values(f"{eval_key}").count(False)
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": f1_left_edges.tolist(),
+                    "y": f1_counts.tolist(),
+                    "type": "bar",
+                    "width": f1_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.f1",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
 
+                p_class_list = []
+                r_class_list = []
+                f1_class_list = []
+                conf_class_list = []
+                for cls in classes:
+                    tp = sum(
+                        sublist.count("tp")
+                        for sublist in ctx.dataset.filter_labels(
+                            pred_field, F("label").is_in([cls])
+                        ).values(f"{pred_field}.detections.{eval_key}")
+                    )
+                    fp = sum(
+                        sublist.count("fp")
+                        for sublist in ctx.dataset.filter_labels(
+                            pred_field, F("label").is_in([cls])
+                        ).values(f"{pred_field}.detections.{eval_key}")
+                    )
+                    fn = sum(
+                        sublist.count("fn")
+                        for sublist in ctx.dataset.filter_labels(
+                            gt_field, F("label").is_in([cls])
+                        ).values(f"{gt_field}.detections.{eval_key}")
+                    )
 
+                    conf_total = [
+                        item
+                        for sublist in ctx.dataset.filter_labels(
+                            pred_field, F("label").is_in([cls])
+                        ).values(f"{pred_field}.detections.confidence")
+                        for item in sublist
+                    ]
 
-                p = tp / (tp + fp)
-                p = np.nan_to_num(p, nan=0.0)
-                r = tp / (tp + fn)
-                r = np.nan_to_num(r, nan=0.0)
-                f1 = 2 * (p * r) / (p + r)
-                f1 = np.nan_to_num(f1, nan=0.0)
-            
-                p_class_list.append(p)
-                r_class_list.append(r)
-                f1_class_list.append(f1)
-            
-            histogram_data = {
-                "name": f"{pred_field}.detections.{eval_key}",
-                'x': classes,
-                'y': p_class_list,
-                'type': 'bar',
-            }
-            ctx.panel.set_data('my_stack.p_class', [
-                # trace
-                histogram_data,
-            ])
+                    conf = sum(conf_total) / len(conf_total)
 
-            histogram_data = {
-                "name": f"{pred_field}.detections.{eval_key}",
-                'x': classes,
-                'y': r_class_list,
-                'type': 'bar',
-            }
-            ctx.panel.set_data('my_stack.r_class', [
-                # trace
-                histogram_data,
-            ])
+                    p = tp / (tp + fp)
+                    p = np.nan_to_num(p, nan=0.0)
+                    r = tp / (tp + fn)
+                    r = np.nan_to_num(r, nan=0.0)
+                    f1 = 2 * (p * r) / (p + r)
+                    f1 = np.nan_to_num(f1, nan=0.0)
 
-            histogram_data = {
-                "name": f"{pred_field}.detections.{eval_key}",
-                'x': classes,
-                'y': f1_class_list,
-                'type': 'bar',
-            }
-            ctx.panel.set_data('my_stack.f1_class', [
-                # trace
-                histogram_data,
-            ])
+                    p_class_list.append(p)
+                    r_class_list.append(r)
+                    f1_class_list.append(f1)
+                    conf_class_list.append(conf)
 
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": conf_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.conf_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": p_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.p_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
 
-        confusion_matrix, labels, ids = results._confusion_matrix(include_other=False, include_missing=False,)
-        confusion_matrix = np.asarray(confusion_matrix)
-        ids = np.asarray(ids)
-        num_rows, num_cols = confusion_matrix.shape
-        zlim = [0, confusion_matrix.max()]
-        eval_info = ctx.dataset.get_evaluation_info(eval_key)
-        gt_field = eval_info.config.gt_field
-        pred_field = eval_info.config.pred_field
-        label_type = ctx.dataset._get_label_field_type(gt_field)
-        use_patches = issubclass(label_type, (fol.Detections, fol.Polylines))
-        label_fields = [gt_field, pred_field]
-        xlabels = labels[:num_cols]
-        ylabels = labels[:num_rows]
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": r_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.r_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
 
-        # Flip data so plot will have the standard descending diagonal
-        # Flipping the yaxis via `autorange="reversed"` isn't an option because
-        # screenshots don't seem to respect that setting...
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": f1_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.f1_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+                confusion_matrix, labels, ids = results._confusion_matrix(
+                include_other=False,
+                include_missing=True,
+                )
+                # confusion_matrix = list(map(list, zip(confusion_matrix)))
 
+                cm_data = {
+                    "z": confusion_matrix,
+                    "x": labels,
+                    "y": labels,
+                    "type": "heatmap",
+                }
+                ctx.panel.set_data(
+                    "my_stack.cm",
+                    [
+                        # trace
+                        cm_data,
+                    ],
+                )
+            elif eval_type == "classification":
+                classes = ctx.dataset.distinct(f"{pred_field}.label")
 
-        if use_patches:
-            selection_mode = "patches"
-            init_fcn = lambda view: view.to_evaluation_patches(eval_key)
+                x = f"{pred_field}.confidence"
+                bins = 10
+                counts, edges, other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
+                counts = np.asarray(counts)
+                edges = np.asarray(edges)
+
+                left_edges = edges[:-1]
+                widths = edges[1:] - edges[:-1]
+                histogram_data = {
+                    "name": f"{pred_field}.confidence",
+                    "x": left_edges.tolist(),
+                    "ids": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"],
+                    "y": counts.tolist(),
+                    "type": "bar",
+                    "width": widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.confidence",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                p_class_list = []
+                r_class_list = []
+                f1_class_list = []
+                conf_class_list = []
+                for cls in classes:
+                    tp = (
+                        ctx.dataset.filter_labels(pred_field, F("label").is_in([cls]))
+                        .values(f"{eval_key}")
+                        .count(True)
+                    )
+                    fp = (
+                        ctx.dataset.filter_labels(pred_field, F("label").is_in([cls]))
+                        .values(f"{eval_key}")
+                        .count(False)
+                    )
+                    fn = (
+                        ctx.dataset.filter_labels(gt_field, F("label").is_in([cls]))
+                        .values(f"{eval_key}")
+                        .count(False)
+                    )
+                    conf_total = ctx.dataset.filter_labels(
+                        pred_field, F("label").is_in([cls])
+                    ).values(f"{pred_field}.confidence")
+
+                    conf = sum(conf_total) / len(conf_total)
+
+                    p = tp / (tp + fp)
+                    p = np.nan_to_num(p, nan=0.0)
+                    r = tp / (tp + fn)
+                    r = np.nan_to_num(r, nan=0.0)
+                    f1 = 2 * (p * r) / (p + r)
+                    f1 = np.nan_to_num(f1, nan=0.0)
+
+                    p_class_list.append(p)
+                    r_class_list.append(r)
+                    f1_class_list.append(f1)
+                    conf_class_list.append(conf)
+
+                histogram_data = {
+                    "name": f"{pred_field}.confidence",
+                    "x": classes,
+                    "y": conf_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.conf_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+                histogram_data = {
+                    "name": f"{pred_field}.{eval_key}",
+                    "x": classes,
+                    "y": p_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.p_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.{eval_key}",
+                    "x": classes,
+                    "y": r_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.r_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.{eval_key}",
+                    "x": classes,
+                    "y": f1_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.f1_class",
+                    [
+                        # trace
+                        histogram_data,
+                    ],
+                )
+
+                confusion_matrix, labels, ids = results._confusion_matrix(
+                    include_other=False,
+                    include_missing=False,
+                )
+                # confusion_matrix = list(map(list, zip(confusion_matrix)))
+
+                cm_data = {
+                    "z": confusion_matrix,
+                    "x": labels,
+                    "y": labels,
+                    "type": "heatmap",
+                }
+                ctx.panel.set_data(
+                    "my_stack.cm",
+                    [
+                        # trace
+                        cm_data,
+                    ],
+                )
         else:
-            selection_mode = "select"
-            init_fcn = None
+            c_info = ctx.dataset.get_evaluation_info(compare_key).serialize()
+            c_results = ctx.dataset.load_evaluation_results(compare_key)
+            c_pred_field = c_info["config"]["pred_field"]
+            c_gt_field = c_info["config"]["gt_field"]
 
-        cm_data = {
-            'z': confusion_matrix,
-            'x': labels,
-            'y': labels,
-            'type': 'heatmap',
-        }
-        ctx.panel.set_data('my_stack.cm', [
-            # trace
-            cm_data,
-        ])
+            if eval_type == "detection":
+                classes = ctx.dataset.distinct(f"{pred_field}.detections.label")
+                c_classes = ctx.dataset.distinct(f"{c_pred_field}.detections.label")
 
+                bins = 10
+                x = f"{pred_field}.detections.confidence"
+                counts, edges, other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
 
-        
+                x = f"{c_pred_field}.detections.confidence"
+                c_counts, c_edges, c_other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
 
-    def on_numerical_click(self,ctx):
-        print(ctx.params)
-        path = ctx.params.get("path")
-        plot = ctx.panel.get_state(path)
-        raise Exception(plot)
-        """
-        params = ctx.panel.state.get("my_stack.data")
-        x = params["x"]
-        left_edge
-        right_edge
-        plot_clicked
+                counts = np.asarray(counts)
+                edges = np.asarray(edges)
+                c_counts = np.asarray(c_counts)
+                c_edges = np.asarray(c_edges)
 
-        bar_click
-        bars_clicked
+                left_edges = edges[:-1]
+                widths = edges[1:] - edges[:-1]
+                c_left_edges = c_edges[:-1]
+                c_widths = c_edges[1:] - c_edges[:-1]
+                histogram_data = {
+                    "name": f"{pred_field}.detections.confidence",
+                    "x": left_edges.tolist(),
+                    "y": counts.tolist(),
+                    "width": widths.tolist(),
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.confidence",
+                    "x": c_left_edges.tolist(),
+                    "y": c_counts.tolist(),
+                    "width": c_widths.tolist(),
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.confidence",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
 
-        name = params["name"]
-        view = ctx.dataset.match(name < x)
-        ctx.ops.set_view(view)
-        """
+                bins = 10
+                x = f"{pred_field}.detections.{eval_key}_iou"
+                counts, edges, other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
 
+                x = f"{c_pred_field}.detections.{compare_key}_iou"
+                c_counts, c_edges, c_other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
 
-    def on_categorical_click(self,ctx):
-        pass
-        
+                counts = np.asarray(counts)
+                edges = np.asarray(edges)
+                c_counts = np.asarray(c_counts)
+                c_edges = np.asarray(c_edges)
+
+                left_edges = edges[:-1]
+                widths = edges[1:] - edges[:-1]
+                c_left_edges = c_edges[:-1]
+                c_widths = c_edges[1:] - c_edges[:-1]
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}_iou",
+                    "x": left_edges.tolist(),
+                    "y": counts.tolist(),
+                    "width": widths.tolist(),
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}_iou",
+                    "x": c_left_edges.tolist(),
+                    "y": c_counts.tolist(),
+                    "width": c_widths.tolist(),
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.iou",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                tp = np.array(ctx.dataset.values(f"{eval_key}_tp"))
+                fp = np.array(ctx.dataset.values(f"{eval_key}_fp"))
+                fn = np.array(ctx.dataset.values(f"{eval_key}_fn"))
+
+                c_tp = np.array(ctx.dataset.values(f"{compare_key}_tp"))
+                c_fp = np.array(ctx.dataset.values(f"{compare_key}_fp"))
+                c_fn = np.array(ctx.dataset.values(f"{compare_key}_fn"))
+
+                p = tp / (tp + fp)
+                p = np.nan_to_num(p, nan=0.0)
+                r = tp / (tp + fn)
+                r = np.nan_to_num(r, nan=0.0)
+                f1 = 2 * (p * r) / (p + r)
+                f1 = np.nan_to_num(f1, nan=0.0)
+
+                c_p = c_tp / (c_tp + c_fp)
+                c_p = np.nan_to_num(c_p, nan=0.0)
+                c_r = c_tp / (c_tp + c_fn)
+                c_r = np.nan_to_num(c_r, nan=0.0)
+                c_f1 = 2 * (c_p * c_r) / (c_p + c_r)
+                c_f1 = np.nan_to_num(c_f1, nan=0.0)
+
+                p_left_edges, p_counts, p_widths = compute_histogram(p, 10)
+                c_p_left_edges, c_p_counts, c_p_widths = compute_histogram(c_p, 10)
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": p_left_edges.tolist(),
+                    "y": p_counts.tolist(),
+                    "type": "bar",
+                    "width": p_widths.tolist(),
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}",
+                    "x": c_p_left_edges.tolist(),
+                    "y": c_p_counts.tolist(),
+                    "type": "bar",
+                    "width": c_p_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.precision",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                r_left_edges, r_counts, r_widths = compute_histogram(r, 10)
+                c_r_left_edges, c_r_counts, c_r_widths = compute_histogram(c_r, 10)
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": r_left_edges.tolist(),
+                    "y": r_counts.tolist(),
+                    "type": "bar",
+                    "width": r_widths.tolist(),
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}",
+                    "x": c_r_left_edges.tolist(),
+                    "y": c_r_counts.tolist(),
+                    "type": "bar",
+                    "width": c_r_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.recall",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                f1_left_edges, f1_counts, f1_widths = compute_histogram(f1, 10)
+                c_f1_left_edges, c_f1_counts, c_f1_widths = compute_histogram(c_f1, 10)
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": f1_left_edges.tolist(),
+                    "y": f1_counts.tolist(),
+                    "type": "bar",
+                    "width": f1_widths.tolist(),
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}",
+                    "x": c_f1_left_edges.tolist(),
+                    "y": c_f1_counts.tolist(),
+                    "type": "bar",
+                    "width": c_f1_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.f1",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                p_class_list = []
+                r_class_list = []
+                f1_class_list = []
+                conf_class_list = []
+
+                c_p_class_list = []
+                c_r_class_list = []
+                c_f1_class_list = []
+                c_conf_class_list = []
+
+                for cls in classes:
+                    tp = sum(
+                        sublist.count("tp")
+                        for sublist in ctx.dataset.filter_labels(
+                            pred_field, F("label").is_in([cls])
+                        ).values(f"{pred_field}.detections.{eval_key}")
+                    )
+                    fp = sum(
+                        sublist.count("fp")
+                        for sublist in ctx.dataset.filter_labels(
+                            pred_field, F("label").is_in([cls])
+                        ).values(f"{pred_field}.detections.{eval_key}")
+                    )
+                    fn = sum(
+                        sublist.count("fn")
+                        for sublist in ctx.dataset.filter_labels(
+                            gt_field, F("label").is_in([cls])
+                        ).values(f"{gt_field}.detections.{eval_key}")
+                    )
+
+                    conf_total = [
+                        item
+                        for sublist in ctx.dataset.filter_labels(
+                            pred_field, F("label").is_in([cls])
+                        ).values(f"{pred_field}.detections.confidence")
+                        for item in sublist
+                    ]
+
+                    conf = sum(conf_total) / len(conf_total)
+
+                    p = tp / (tp + fp)
+                    p = np.nan_to_num(p, nan=0.0)
+                    r = tp / (tp + fn)
+                    r = np.nan_to_num(r, nan=0.0)
+                    f1 = 2 * (p * r) / (p + r)
+                    f1 = np.nan_to_num(f1, nan=0.0)
+
+                    p_class_list.append(p)
+                    r_class_list.append(r)
+                    f1_class_list.append(f1)
+                    conf_class_list.append(conf)
+
+                    if cls not in c_classes:
+                        p_class_list.append(None)
+                        r_class_list.append(None)
+                        f1_class_list.append(None)
+                        conf_class_list.append(None)
+                    else:
+                        c_tp = sum(
+                            sublist.count("tp")
+                            for sublist in ctx.dataset.filter_labels(
+                                c_pred_field, F("label").is_in([cls])
+                            ).values(f"{c_pred_field}.detections.{compare_key}")
+                        )
+                        c_fp = sum(
+                            sublist.count("fp")
+                            for sublist in ctx.dataset.filter_labels(
+                                c_pred_field, F("label").is_in([cls])
+                            ).values(f"{c_pred_field}.detections.{compare_key}")
+                        )
+                        c_fn = sum(
+                            sublist.count("fn")
+                            for sublist in ctx.dataset.filter_labels(
+                                c_gt_field, F("label").is_in([cls])
+                            ).values(f"{c_gt_field}.detections.{compare_key}")
+                        )
+
+                        c_conf_total = [
+                            item
+                            for sublist in ctx.dataset.filter_labels(
+                                c_pred_field, F("label").is_in([cls])
+                            ).values(f"{c_pred_field}.detections.confidence")
+                            for item in sublist
+                        ]
+
+                        c_conf = sum(c_conf_total) / len(c_conf_total)
+
+                        c_p = c_tp / (c_tp + c_fp)
+                        c_p = np.nan_to_num(c_p, nan=0.0)
+                        c_r = c_tp / (c_tp + c_fn)
+                        c_r = np.nan_to_num(c_r, nan=0.0)
+                        c_f1 = 2 * (c_p * c_r) / (c_p + c_r)
+                        c_f1 = np.nan_to_num(c_f1, nan=0.0)
+
+                        c_p_class_list.append(c_p)
+                        c_r_class_list.append(c_r)
+                        c_f1_class_list.append(c_f1)
+                        c_conf_class_list.append(c_conf)
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": conf_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}",
+                    "x": classes,
+                    "y": c_conf_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.conf_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": p_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{gt_field}.detections.{compare_key}",
+                    "x": classes,
+                    "y": c_p_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.p_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": r_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}",
+                    "x": classes,
+                    "y": c_r_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.r_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.detections.{eval_key}",
+                    "x": classes,
+                    "y": f1_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.detections.{compare_key}",
+                    "x": classes,
+                    "y": c_f1_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.f1_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+                confusion_matrix, labels, ids = results._confusion_matrix(
+                include_other=False,
+                include_missing=True,
+                )
+                # confusion_matrix = list(map(list, zip(confusion_matrix)))
+
+                cm_data = {
+                    "z": confusion_matrix,
+                    "x": labels,
+                    "y": labels,
+                    "type": "heatmap",
+                }
+
+                c_confusion_matrix, c_labels, c_ids = c_results._confusion_matrix(
+                    include_other=False,
+                    include_missing=True,
+                )
+                # c_confusion_matrix = list(map(list, zip(c_confusion_matrix)))
+
+                c_cm_data = {
+                    "z": c_confusion_matrix,
+                    "x": c_labels,
+                    "y": c_labels,
+                    "type": "heatmap",
+                }
+                ctx.panel.set_data(
+                    "my_stack.cm",
+                    [
+                        # trace
+                        cm_data,
+                    ],
+                )
+                ctx.panel.set_data(
+                    "my_stack.c_cm",
+                    [
+                        # trace
+                        c_cm_data,
+                    ],
+                )
+            elif eval_type == "classification":
+                classes = ctx.dataset.distinct(f"{pred_field}.label")
+                c_classes = ctx.dataset.distinct(f"{c_pred_field}.label")
+
+                x = f"{pred_field}.confidence"
+                bins = 10
+                counts, edges, other = ctx.dataset.histogram_values(
+                    x,
+                    bins=bins,
+                )
+                counts = np.asarray(counts)
+                edges = np.asarray(edges)
+
+                x = f"{c_pred_field}.confidence"
+
+                left_edges = edges[:-1]
+                widths = edges[1:] - edges[:-1]
+                histogram_data = {
+                    "name": f"{pred_field}.confidence",
+                    "x": left_edges.tolist(),
+                    "ids": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"],
+                    "y": counts.tolist(),
+                    "type": "bar",
+                    "width": widths.tolist(),
+                }
+
+                c_x = f"{c_pred_field}.confidence"
+                c_bins = 10
+                c_counts, c_edges, c_other = ctx.dataset.histogram_values(
+                    c_x,
+                    bins=c_bins,
+                )
+                c_counts = np.asarray(c_counts)
+                c_edges = np.asarray(c_edges)
+
+                c_left_edges = c_edges[:-1]
+                c_widths = c_edges[1:] - c_edges[:-1]
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.confidence",
+                    "x": c_left_edges.tolist(),
+                    "ids": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"],
+                    "y": c_counts.tolist(),
+                    "type": "bar",
+                    "width": c_widths.tolist(),
+                }
+                ctx.panel.set_data(
+                    "my_stack.confidence",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                p_class_list = []
+                r_class_list = []
+                f1_class_list = []
+                conf_class_list = []
+
+                c_p_class_list = []
+                c_r_class_list = []
+                c_f1_class_list = []
+                c_conf_class_list = []
+                for cls in classes:
+                    tp = (
+                        ctx.dataset.filter_labels(pred_field, F("label").is_in([cls]))
+                        .values(f"{eval_key}")
+                        .count(True)
+                    )
+                    fp = (
+                        ctx.dataset.filter_labels(pred_field, F("label").is_in([cls]))
+                        .values(f"{eval_key}")
+                        .count(False)
+                    )
+                    fn = (
+                        ctx.dataset.filter_labels(gt_field, F("label").is_in([cls]))
+                        .values(f"{eval_key}")
+                        .count(False)
+                    )
+                    conf_total = ctx.dataset.filter_labels(
+                        pred_field, F("label").is_in([cls])
+                    ).values(f"{pred_field}.confidence")
+
+                    conf = sum(conf_total) / len(conf_total)
+
+                    p = tp / (tp + fp)
+                    p = np.nan_to_num(p, nan=0.0)
+                    r = tp / (tp + fn)
+                    r = np.nan_to_num(r, nan=0.0)
+                    f1 = 2 * (p * r) / (p + r)
+                    f1 = np.nan_to_num(f1, nan=0.0)
+
+                    p_class_list.append(p)
+                    r_class_list.append(r)
+                    f1_class_list.append(f1)
+                    conf_class_list.append(conf)
+
+                    if cls not in c_classes:
+                        p_class_list.append(None)
+                        r_class_list.append(None)
+                        f1_class_list.append(None)
+                        conf_class_list.append(None)
+                    else:
+                        c_tp = (
+                            ctx.dataset.filter_labels(
+                                c_pred_field, F("label").is_in([cls])
+                            )
+                            .values(f"{compare_key}")
+                            .count(True)
+                        )
+                        c_fp = (
+                            ctx.dataset.filter_labels(
+                                c_pred_field, F("label").is_in([cls])
+                            )
+                            .values(f"{compare_key}")
+                            .count(False)
+                        )
+                        c_fn = (
+                            ctx.dataset.filter_labels(gt_field, F("label").is_in([cls]))
+                            .values(f"{compare_key}")
+                            .count(False)
+                        )
+                        c_conf_total = ctx.dataset.filter_labels(
+                            c_pred_field, F("label").is_in([cls])
+                        ).values(f"{c_pred_field}.confidence")
+
+                        c_conf = sum(c_conf_total) / len(c_conf_total)
+
+                        c_p = c_tp / (c_tp + c_fp)
+                        c_p = np.nan_to_num(c_p, nan=0.0)
+                        c_r = c_tp / (c_tp + c_fn)
+                        c_r = np.nan_to_num(c_r, nan=0.0)
+                        c_f1 = 2 * (c_p * c_r) / (c_p + c_r)
+                        c_f1 = np.nan_to_num(c_f1, nan=0.0)
+
+                        c_p_class_list.append(c_p)
+                        c_r_class_list.append(c_r)
+                        c_f1_class_list.append(c_f1)
+                        c_conf_class_list.append(c_conf)
+
+                histogram_data = {
+                    "name": f"{pred_field}.confidence",
+                    "x": classes,
+                    "y": conf_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.confidence",
+                    "x": c_classes,
+                    "y": c_conf_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.conf_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+                histogram_data = {
+                    "name": f"{pred_field}.{eval_key}",
+                    "x": classes,
+                    "y": p_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.{compare_key}",
+                    "x": classes,
+                    "y": c_p_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.p_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.{eval_key}",
+                    "x": classes,
+                    "y": r_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.{compare_key}",
+                    "x": classes,
+                    "y": c_r_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.r_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                histogram_data = {
+                    "name": f"{pred_field}.{eval_key}",
+                    "x": classes,
+                    "y": f1_class_list,
+                    "type": "bar",
+                }
+                c_histogram_data = {
+                    "name": f"{c_pred_field}.{compare_key}",
+                    "x": classes,
+                    "y": c_f1_class_list,
+                    "type": "bar",
+                }
+                ctx.panel.set_data(
+                    "my_stack.f1_class",
+                    [
+                        # trace
+                        histogram_data,
+                        c_histogram_data,
+                    ],
+                )
+
+                confusion_matrix, labels, ids = results._confusion_matrix(
+                    include_other=False,
+                    include_missing=False,
+                )
+                # confusion_matrix = list(map(list, zip(confusion_matrix)))
+
+                cm_data = {
+                    "z": confusion_matrix,
+                    "x": labels,
+                    "y": labels,
+                    "type": "heatmap",
+                }
+
+                c_confusion_matrix, c_labels, c_ids = c_results._confusion_matrix(
+                    include_other=False,
+                    include_missing=False,
+                )
+                # c_confusion_matrix = list(map(list, zip(c_confusion_matrix)))
+
+                c_cm_data = {
+                    "z": c_confusion_matrix,
+                    "x": c_labels,
+                    "y": c_labels,
+                    "type": "heatmap",
+                }
+                ctx.panel.set_data(
+                    "my_stack.cm",
+                    [
+                        # trace
+                        cm_data,
+                    ],
+                )
+                ctx.panel.set_data(
+                    "my_stack.c_cm",
+                    [
+                        # trace
+                        c_cm_data,
+                    ],
+                )
+
     def _add_plots(self, ctx, stack):
-    
         eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
-        
-            
+
         current_eval = ctx.dataset.get_evaluation_info(eval_key).serialize()
 
-        
-        config = {
-                "scrollZoom": False
-            }
+        config = {"scrollZoom": False}
         layout = {
             "title": "Confidence",
             "bargap": 0,
             "bargroupgap": 0,
-            "xaxis": {
-                "title": "Confidence"
-            },
-            "yaxis": {
-                "title": "Count"
-            },
+            "xaxis": {"title": "Confidence"},
+            "yaxis": {"title": "Count"},
             "showlegend": True,
-            "legend": {
-                "x": 0,
-                "y": 1,
-                "showlegend": True
-            }
+            "legend": {"x": 0, "y": 1, "showlegend": True},
         }
-        stack.add_property('confidence', types.Property(
-            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click, on_selected=self.on_numerical_click)
-        ))
-
+        stack.add_property(
+            "confidence",
+            types.Property(
+                types.List(types.Object()),
+                view=types.PlotlyView(
+                    config=config,
+                    layout=layout,
+                    on_click=self.on_numerical_click,
+                    on_selected=self.on_numerical_click,
+                ),
+            ),
+        )
 
         if current_eval["config"]["type"] != "classification":
-            config = {
-                "scrollZoom": False
-            }
+            config = {"scrollZoom": False}
             layout = {
                 "title": "IOU",
                 "bargap": 0,
                 "bargroupgap": 0,
-                "xaxis": {
-                    "title": "IOU"
-                },
-                "yaxis": {
-                    "title": "Count"
-                },
+                "xaxis": {"title": "IOU"},
+                "yaxis": {"title": "Count"},
                 "showlegend": True,
-                "legend": {
-                    "x": 0,
-                    "y": 1,
-                    "showlegend": True
-                }
+                "legend": {"x": 0, "y": 1, "showlegend": True},
             }
-            stack.add_property('iou', types.Property(
-                types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
-            ))
+            stack.add_property(
+                "iou",
+                types.Property(
+                    types.List(types.Object()),
+                    view=types.PlotlyView(
+                        config=config, layout=layout, on_click=self.on_numerical_click
+                    ),
+                ),
+            )
 
-            config = {
-                "scrollZoom": False
-            }
+            config = {"scrollZoom": False}
             layout = {
                 "title": "Precision Distribution",
                 "bargap": 0,
                 "bargroupgap": 0,
-                "xaxis": {
-                    "title": "Precision per Sample"
-                },
-                "yaxis": {
-                    "title": "Count"
-                },
+                "xaxis": {"title": "Precision per Sample"},
+                "yaxis": {"title": "Count"},
                 "showlegend": True,
-                "legend": {
-                    "x": 0,
-                    "y": 1,
-                    "showlegend": True
-                }
+                "legend": {"x": 0, "y": 1, "showlegend": True},
             }
-            stack.add_property('precision', types.Property(
-                types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
-            ))
+            stack.add_property(
+                "precision",
+                types.Property(
+                    types.List(types.Object()),
+                    view=types.PlotlyView(
+                        config=config, layout=layout, on_click=self.on_numerical_click
+                    ),
+                ),
+            )
 
-            
-            config = {
-                "scrollZoom": False
-            }
+            config = {"scrollZoom": False}
             layout = {
                 "title": "Recall Distribution",
                 "bargap": 0,
                 "bargroupgap": 0,
-                "xaxis": {
-                    "title": "Recall per Sample"
-                },
-                "yaxis": {
-                    "title": "Count"
-                },
+                "xaxis": {"title": "Recall per Sample"},
+                "yaxis": {"title": "Count"},
                 "showlegend": True,
-                "legend": {
-                    "x": 0,
-                    "y": 1,
-                    "showlegend": True
-                }
+                "legend": {"x": 0, "y": 1, "showlegend": True},
             }
-            stack.add_property('recall', types.Property(
-                types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
-            ))
+            stack.add_property(
+                "recall",
+                types.Property(
+                    types.List(types.Object()),
+                    view=types.PlotlyView(
+                        config=config, layout=layout, on_click=self.on_numerical_click
+                    ),
+                ),
+            )
 
-            config = {
-                "scrollZoom": False
-            }
+            config = {"scrollZoom": False}
             layout = {
                 "title": "F1-Score Distribution",
                 "bargap": 0,
                 "bargroupgap": 0,
-                "xaxis": {
-                    "title": "F1-Score per Sample"
-                },
-                "yaxis": {
-                    "title": "Count"
-                },
+                "xaxis": {"title": "F1-Score per Sample"},
+                "yaxis": {"title": "Count"},
                 "showlegend": True,
-                "legend": {
-                    "x": 0,
-                    "y": 1,
-                    "showlegend": True
-                }
+                "legend": {"x": 0, "y": 1, "showlegend": True},
             }
-            stack.add_property('f1', types.Property(
-                types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_numerical_click)
-            ))
+            stack.add_property(
+                "f1",
+                types.Property(
+                    types.List(types.Object()),
+                    view=types.PlotlyView(
+                        config=config, layout=layout, on_click=self.on_numerical_click
+                    ),
+                ),
+            )
 
-        config = {
-            "scrollZoom": False
+        config = {"scrollZoom": False}
+        layout = {
+            "title": "Confidence per Class",
+            "bargap": 0,
+            "bargroupgap": 0,
+            "xaxis": {"title": "Class"},
+            "yaxis": {"title": "Confidence"},
+            "showlegend": True,
+            "legend": {"x": 0, "y": 1, "showlegend": True},
         }
+        stack.add_property(
+            "conf_class",
+            types.Property(
+                types.List(types.Object()),
+                view=types.PlotlyView(
+                    config=config, layout=layout, on_click=self.on_categorical_click
+                ),
+            ),
+        )
+        config = {"scrollZoom": False}
         layout = {
             "title": "Precision per Class",
             "bargap": 0,
             "bargroupgap": 0,
-            "xaxis": {
-                "title": "Precision per Class"
-            },
-            "yaxis": {
-                "title": "Precision"
-            },
+            "xaxis": {"title": "Class"},
+            "yaxis": {"title": "Precision"},
             "showlegend": True,
-            "legend": {
-                "x": 0,
-                "y": 1,
-                "showlegend": True
-            }
+            "legend": {"x": 0, "y": 1, "showlegend": True},
         }
-        stack.add_property('p_class', types.Property(
-            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_categorical_click)
-        ))
+        stack.add_property(
+            "p_class",
+            types.Property(
+                types.List(types.Object()),
+                view=types.PlotlyView(
+                    config=config, layout=layout, on_click=self.on_categorical_click
+                ),
+            ),
+        )
 
-        config = {
-            "scrollZoom": False
-        }
+        config = {"scrollZoom": False}
         layout = {
             "title": "Recall per Class",
             "bargap": 0,
             "bargroupgap": 0,
-            "xaxis": {
-                "title": "Recall per Class"
-            },
-            "yaxis": {
-                "title": "Recall"
-            },
+            "xaxis": {"title": "Class"},
+            "yaxis": {"title": "Recall"},
             "showlegend": True,
-            "legend": {
-                "x": 0,
-                "y": 1,
-                "showlegend": True
-            }
+            "legend": {"x": 0, "y": 1, "showlegend": True},
         }
-        stack.add_property('r_class', types.Property(
-            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_categorical_click)
-        ))
+        stack.add_property(
+            "r_class",
+            types.Property(
+                types.List(types.Object()),
+                view=types.PlotlyView(
+                    config=config, layout=layout, on_click=self.on_categorical_click
+                ),
+            ),
+        )
 
-        config = {
-            "scrollZoom": False
-        }
+        config = {"scrollZoom": False}
         layout = {
             "title": "F1-Score per Class",
             "bargap": 0,
             "bargroupgap": 0,
-            "xaxis": {
-                "title": "F1-Score per Class"
-            },
-            "yaxis": {
-                "title": "F1-Score"
-            },
+            "xaxis": {"title": "Class"},
+            "yaxis": {"title": "F1-Score"},
             "showlegend": True,
-            "legend": {
-                "x": 0,
-                "y": 1,
-                "showlegend": True
-            }
+            "legend": {"x": 0, "y": 1, "showlegend": True},
         }
-        stack.add_property('f1_class', types.Property(
-            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout, on_click=self.on_categorical_click)
-        ))
+        stack.add_property(
+            "f1_class",
+            types.Property(
+                types.List(types.Object()),
+                view=types.PlotlyView(
+                    config=config, layout=layout, on_click=self.on_categorical_click
+                ),
+            ),
+        )
 
         config = {}
         layout = {
-                    "title": "Confusion Matrix",
-                    "xaxis": {"fixedrange": True, "title": "Ground truth"},
-                    "yaxis": {"fixedrange": True, "title": "Model predictions"},
-                }
-        
-        stack.add_property('cm', types.Property(
-            types.List(types.Object()), view=types.PlotlyView(config=config, layout=layout,)
-        ))
+            "title": f"Confusion Matrix for {eval_key}",
+            "yaxis": {"fixedrange": True, "title": "Ground truth"},
+            "xaxis": {"fixedrange": True, "title": "Model predictions"},
+        }
+
+        stack.add_property(
+            "cm",
+            types.Property(
+                types.List(types.Object()),
+                view=types.PlotlyView(
+                    config=config, layout=layout, on_click=self.on_cm_click
+                ),
+            ),
+        )
+
+        compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key", None)
+        if compare_key is not None:
+            config = {}
+            layout = {
+                "title": f"Confusion Matrix for {compare_key}",
+                "yaxis": {"fixedrange": True, "title": "Ground truth"},
+                "xaxis": {"fixedrange": True, "title": "Model predictions"},
+            }
+
+            stack.add_property(
+                "c_cm",
+                types.Property(
+                    types.List(types.Object()),
+                    view=types.PlotlyView(
+                        config=config, layout=layout, on_click=self.on_cm_click
+                    ),
+                ),
+            )
+
 
 def _eval_results(ctx, stack, current_eval):
-
     eval_type = current_eval["config"]["type"]
     stack.md("### Evaluation Results")
 
     # Define table structure
     item_obj = types.Object()
-    item_obj.str('class')
-    item_obj.float('precision')
-    item_obj.float('recall')
-    item_obj.float('f1-score')
-    item_obj.float('support')
+    item_obj.str("class")
+    item_obj.float("precision")
+    item_obj.float("recall")
+    item_obj.float("f1-score")
+    item_obj.float("support")
 
     # Define the table
-    table_view = types.TableView() 
-    table_view.add_column('class', label="Class")
-    table_view.add_column('precision', label="Precision")
-    table_view.add_column('recall', label="Recall")
-    table_view.add_column('f1-score', label="F1-Score")
-    table_view.add_column('support', label="Support")
+    table_view = types.TableView()
+    table_view.add_column("class", label="Class")
+    table_view.add_column("precision", label="Precision")
+    table_view.add_column("recall", label="Recall")
+    table_view.add_column("f1-score", label="F1-Score")
+    table_view.add_column("support", label="Support")
 
     # Add table to the stack
-    stack.list('evaluations', element_type=item_obj, view=table_view)
+    stack.list("evaluations", element_type=item_obj, view=table_view)
 
-    
     if eval_type and eval_type == "detection":
-
         if current_eval["config"]["compute_mAP"]:
             mAP_obj = types.Object()
-            mAP_obj.str('class')
-            mAP_obj.float('AP')
+            mAP_obj.str("class")
+            mAP_obj.float("AP")
 
-
-            mAP_table_view = types.TableView() 
-            mAP_table_view.add_column('class', label="Class")
-            mAP_table_view.add_column('AP', label="Average Precision")
-            stack.list('mAP_evaluations', element_type=mAP_obj, view=mAP_table_view)
+            mAP_table_view = types.TableView()
+            mAP_table_view.add_column("class", label="Class")
+            mAP_table_view.add_column("AP", label="Average Precision")
+            stack.list("mAP_evaluations", element_type=mAP_obj, view=mAP_table_view)
         else:
             stack.md("No mAP copmuted on this eval_key")
+
 
 def _eval_info(ctx, stack, current_eval):
     eval_info = current_eval.serialize()
 
     if current_eval is not None:
-    
-
         # Run info
         stack.view(
             "info_header",
@@ -962,7 +3310,6 @@ def _eval_info(ctx, stack, current_eval):
             label="Eval key",
             default=eval_info["key"],
             view=types.LabelValueView(read_only=True),
-
         )
         stack.str(
             "info_run_type",
@@ -1018,18 +3365,18 @@ def _eval_info(ctx, stack, current_eval):
             view=types.SwitchView(),
         )
 
+
 def compute_histogram(values, num_bins):
     # Compute the histogram
     counts, bin_edges = np.histogram(values, bins=num_bins)
-    
+
     # Calculate the left edges of the bins
     left_edges = bin_edges[:-1]
-    
+
     # Calculate the width of each bin
     bin_widths = np.diff(bin_edges)
-    
-    return left_edges, counts, bin_widths
 
+    return left_edges, counts, bin_widths
 
 
 def _get_classes(ctx, inputs):
@@ -1172,6 +3519,7 @@ def _get_target_view(ctx, target):
 
     return ctx.view
 
+
 def get_new_eval_key(
     ctx,
     inputs,
@@ -1194,24 +3542,26 @@ def get_new_eval_key(
 
     return eval_key
 
+
 def get_axis_config(plot_config, axis):
-    axis_config = plot_config.get(f"{axis}axis", None)    
+    axis_config = plot_config.get(f"{axis}axis", None)
     return axis_config
 
+
 def get_plot_view(plot_config, on_click=None):
-    panel_id = plot_config.get('panel_id') # this should come from ctx (not params)
-    plot_type = plot_config.get('plot_type')
-    plot_title = plot_config.get('plot_title', None)
+    panel_id = plot_config.get("panel_id")  # this should come from ctx (not params)
+    plot_type = plot_config.get("plot_type")
+    plot_title = plot_config.get("plot_title", None)
     config = {}
-    show_legend = plot_config.get('show_legend', False)
+    show_legend = plot_config.get("show_legend", False)
     layout = {
         "title": plot_title,
         "xaxis": get_axis_config(plot_config, "x"),
         "yaxis": get_axis_config(plot_config, "y"),
         "showlegend": show_legend,
     }
-    x_field = plot_config.get('x_field')
-    y_field = plot_config.get('y_field')
+    x_field = plot_config.get("x_field")
+    y_field = plot_config.get("y_field")
     # is_line = plot_type == "line"
     # is_scatter = plot_type == "scatter"
     # is_eval_results = plot_type == "eval_results"
@@ -1230,76 +3580,80 @@ def get_plot_view(plot_config, on_click=None):
         config=config,
         layout=layout,
         on_click=on_click,
-        x_data_source=plot_config.get('x_field'),
+        x_data_source=plot_config.get("x_field"),
         show_selected=True,
-        height=85
+        height=85,
         # add a param to allow for pulling in ids in callbacks
         # include_point_ids_in_callback=True
     )
 
     return plotly_view
 
+
 def set_view_for_confustion_matrix_cell(ctx, x_field, y_field, x, y):
     view = ctx.dataset.filter_labels(x_field, F("label") == x)
     view = view.filter_labels(y_field, F("label") == y)
     ctx.ops.set_view(view)
 
+
 def get_plot_data(sample_collection, plot_config):
     data = []
-    plot_type = plot_config.get('plot_type')
-    x_field = plot_config.get('x_field')
+    plot_type = plot_config.get("plot_type")
+    x_field = plot_config.get("x_field")
     is_line = plot_type == "line"
     is_scatter = plot_type == "scatter"
     if plot_type == "histogram":
-        bins = plot_config.get('bins', 10)
-        binning_function = plot_config.get('binning_function', 'count')
-        normalization = plot_config.get('normalization', None)
-        cumulative = plot_config.get('cumulative', False)
-        histfunc = plot_config.get('histfunc', 'count')
-        data = [{
-            "type": "histogram",
-            "x": sample_collection.values(x_field),
-            "nbinsx": bins,
-            "histfunc": histfunc,
-            "cumulative_enabled": cumulative,
-            # "marker": {"color": color},
-            "xbin": {"func": binning_function},
-            "histnorm": normalization,
-        }]
+        bins = plot_config.get("bins", 10)
+        binning_function = plot_config.get("binning_function", "count")
+        normalization = plot_config.get("normalization", None)
+        cumulative = plot_config.get("cumulative", False)
+        histfunc = plot_config.get("histfunc", "count")
+        data = [
+            {
+                "type": "histogram",
+                "x": sample_collection.values(x_field),
+                "nbinsx": bins,
+                "histfunc": histfunc,
+                "cumulative_enabled": cumulative,
+                # "marker": {"color": color},
+                "xbin": {"func": binning_function},
+                "histnorm": normalization,
+            }
+        ]
     elif is_line or is_scatter:
-        data = [{
-            "type": "scatter",
-            "mode": is_line and "lines" or "markers",
-            "x": sample_collection.values(plot_config.get('x_field')),
-            "y": sample_collection.values(plot_config.get('y_field'))
-        }]
+        data = [
+            {
+                "type": "scatter",
+                "mode": is_line and "lines" or "markers",
+                "x": sample_collection.values(plot_config.get("x_field")),
+                "y": sample_collection.values(plot_config.get("y_field")),
+            }
+        ]
     elif plot_type == "heatmap":
-        data =   [{
-            "z": [[1, null, 30, 50, 1], [20, 1, 60, 80, 30], [30, 60, 1, -10, 20]],
-            "x": ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-            "y": ['Morning', 'Afternoon', 'Evening'],
-            "type": 'heatmap',
-            "hoverongaps": False
-        }]
+        data = [
+            {
+                "z": [[1, 10, 30, 50, 1], [20, 1, 60, 80, 30], [30, 60, 1, -10, 20]],
+                "x": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+                "y": ["Morning", "Afternoon", "Evening"],
+                "type": "heatmap",
+                "hoverongaps": False,
+            }
+        ]
     elif plot_type == "bar":
         data = [{"type": "bar", "x": [1, 2, 3], "y": [1, 4, 9]}]
     elif plot_type == "eval_results":
-        eval_key = plot_config.get('eval_key')
+        eval_key = plot_config.get("eval_key")
         eval_results = sample_collection.load_evaluation_results(eval_key)
         confusion_matrix = eval_results.confusion_matrix().tolist()
         labels = list(eval_results.classes)
 
-        print('labels length', len(labels))
-        print('confusion matrix length', len(confusion_matrix))
+        print("labels length", len(labels))
+        print("confusion matrix length", len(confusion_matrix))
 
-        data = [{
-            "type": "heatmap",
-            "z": confusion_matrix,
-            "x": labels,
-            "y": labels
-        }]
+        data = [{"type": "heatmap", "z": confusion_matrix, "x": labels, "y": labels}]
 
     return data
+
 
 class AutoLaunchPanel(foo.Operator):
     @property
@@ -1319,16 +3673,15 @@ class AutoLaunchPanel(foo.Operator):
             ctx.ops.open_panel(auto_launch_panel, layout="horizontal", force=True)
         return {}
 
+
 def add_panel_navigation(panel, left=True, right=False, on_left=None, on_right=None):
     base_btn_styles = {
         "position": "absolute",
         "top": "50%",
         "minWidth": 0,
         "padding": "8px",
-        "background":"#333333",
-        "&:hover": {
-            "background": "#2b2a2a"
-        }
+        "background": "#333333",
+        "&:hover": {"background": "#2b2a2a"},
     }
     if left:
         panel.btn(
@@ -1336,7 +3689,7 @@ def add_panel_navigation(panel, left=True, right=False, on_left=None, on_right=N
             label="Previous",
             icon="arrow_back",
             variant="contained",
-            componentsProps={ "button": { "sx": { **base_btn_styles, "left": 8 }}},
+            componentsProps={"button": {"sx": {**base_btn_styles, "left": 8}}},
             on_click=on_left,
         )
     if right:
@@ -1345,11 +3698,29 @@ def add_panel_navigation(panel, left=True, right=False, on_left=None, on_right=N
             label="Next",
             icon="arrow_forward",
             variant="contained",
-            componentsProps={ "button": { "sx": { **base_btn_styles, "right": 8 }}},
+            componentsProps={"button": {"sx": {**base_btn_styles, "right": 8}}},
             on_click=on_right,
         )
+
+
+def count_in_each_range(values, ranges):
+    # Initialize a list to store counts for each range
+    ranges = [0] + ranges
+
+    counts = [0] * (len(ranges) - 1)
+
+    for value in values:
+        for i in range(len(ranges)):
+            if i < len(ranges):
+                if ranges[i] <= value < ranges[i + 1]:
+                    counts[i] += 1
+                    break  # Move to the next value once we've found the right range
+            else:
+                if ranges[i] <= value:
+                    counts[i] += 1
+    return counts
+
 
 def register(p):
     p.register(EvaluationPanel)
     p.register(EvalPlots)
-
