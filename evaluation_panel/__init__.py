@@ -15,14 +15,19 @@ class EvaluationPanel(foo.Panel):
     @property
     def config(self):
         return foo.PanelConfig(
-            name="evaluation_panel", label="evaluation_panel"
+            name="evaluation_panel", 
+            label="Evalution Panel",
+            icon="assessment"
         )
 
     # def on_change_view(self, ctx):
     #     print("View changed")
 
     def on_load(self, ctx):
-        print("Panel loaded")
+        keys = []
+        for key in ctx.dataset.list_evaluations():
+            keys.append(key)
+        ctx.panel.set_state("eval_keys", keys)
 
     def render(self, ctx):
         panel = types.Object()
@@ -38,45 +43,31 @@ class EvaluationPanel(foo.Panel):
         )
 
         # Add operator buttons
-        stack.btn(
-            "evaluate_model", label="Evaluate Model", on_click=self.evaluate_model
-        )
-        stack.btn(
-            "compare_models", label="compare_models", on_click=self.compare_models
-        )
+        eval_comp = stack.menu("eval_comp", variant="contained")
+        eval_comp.btn("evaluate_model", label="Evaluate Model", on_click=self.evaluate_model)
+        eval_comp.btn("compare_models", label="Compare Models", on_click=self.compare_models)
 
         # Create the eval key options for the menus
-        eval_keys = types.Choices()
-        for key in ctx.dataset.list_evaluations():
-            eval_keys.add_choice(key, label=key)
-
-        menu = stack.menu("menu", variant="square", width=100, align_y="center")
-        actions = menu.btn_group("actions")
+        keys = ctx.panel.get_state("eval_keys")
+        current_eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
+        current_compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key")
+        eval_keys = keys.copy()
+        compare_keys = keys.copy()
+        if current_compare_key in eval_keys:
+            eval_keys.remove(current_compare_key)
+        if current_eval_key in compare_keys:
+            compare_keys.remove(current_eval_key)
+        menu = stack.menu('menu', variant="square", width=100, align_y="center")
+        actions = menu.btn_group('actions')
 
         # Add Eval Key Menu
         actions.enum(
             "eval_key",
             label="Evaluation key",
-            values=eval_keys.values(),
+            values=eval_keys,
             view=types.View(space=3),
             on_change=self.on_change_config,
         )
-
-        compare_keys = eval_keys.values()
-
-        # Check to see if state initialized the stack
-        if ctx.panel.get_state("my_stack") is not None:
-            eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
-            if eval_key is not None:
-                # Remove active eval key from the compare list
-                compare_keys = eval_keys.values()
-                index = compare_keys.index(eval_key)
-                compare_keys.pop(index)
-
-                # Find the type of eval
-                current_eval = ctx.dataset.get_evaluation_info(eval_key)
-                eval_type = current_eval.config.type
-
         # Add Compare Key menu
         actions.enum(
             "compare_key",
@@ -293,7 +284,7 @@ class EvaluationPanel(foo.Panel):
                     "support": report[key]["support"],
                 }
             )
-        ctx.panel.set_state("my_stack.evaluations", table_list)
+        ctx.panel.set_data("my_stack.evaluations", table_list)
 
         if eval_type == "detection":
             if current_eval["config"]["compute_mAP"]:
@@ -304,7 +295,7 @@ class EvaluationPanel(foo.Panel):
 
                 new_row = {"class": "All", "AP": results.mAP()}
                 mAP_list.append(new_row)
-                ctx.panel.set_state("my_stack.mAP_evaluations", mAP_list)
+                ctx.panel.set_data("my_stack.mAP_evaluations", mAP_list)
         self._update_plot_data(ctx)
 
     def on_numerical_click(self, ctx):
