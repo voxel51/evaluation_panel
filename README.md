@@ -1,4 +1,6 @@
-# Model Evaluation Panel
+# Evaluation Panel
+
+A panel for evaluating your models in the FiftyOne App.
 
 ## Installation
 
