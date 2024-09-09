@@ -1,0 +1,8 @@
+name: "@danielgural/evaluation_panel"
+description: Model Evaluation Panel
+version: 1.0.0
+fiftyone:
+ version: "*"
+operators:
+ - evaluation_panel
+ - eval_plots
