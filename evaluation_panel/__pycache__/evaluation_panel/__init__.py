@@ -634,11 +634,20 @@ class EvaluationPanel(foo.Panel):
                 fp = np.array(ctx.dataset.values(f"{eval_key}_fp"))
                 fn = np.array(ctx.dataset.values(f"{eval_key}_fn"))
 
-                p = tp / (tp + fp)
+                n = tp.astype(np.float64)
+                d = (tp+fp).astype(np.float64)
+                p = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
                 p = np.nan_to_num(p, nan=0.0)
-                r = tp / (tp + fn)
+
+
+                n = tp.astype(np.float64)
+                d = (tp+fn).astype(np.float64)
+                r = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
                 r = np.nan_to_num(r, nan=0.0)
-                f1 = 2 * (p * r) / (p + r)
+
+                n = (2 * (p * r)).astype(np.float64)
+                d = (p+r).astype(np.float64)
+                f1 = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
                 f1 = np.nan_to_num(f1, nan=0.0)
 
                 p_left_edges, p_counts, p_widths = compute_histogram(p, 10)
@@ -727,12 +736,22 @@ class EvaluationPanel(foo.Panel):
 
                     conf = sum(conf_total) / len(conf_total)
 
-                    p = tp / (tp + fp)
-                    p = np.nan_to_num(p, nan=0.0)
-                    r = tp / (tp + fn)
-                    r = np.nan_to_num(r, nan=0.0)
-                    f1 = 2 * (p * r) / (p + r)
-                    f1 = np.nan_to_num(f1, nan=0.0)
+                    
+                    if tp + fp != 0:
+                        p = tp / (tp + fp)
+                        p = np.nan_to_num(p, nan=0.0)
+                    else:
+                        p = 0
+                    if tp + fn != 0:
+                        r = tp / (tp + fn)
+                        r = np.nan_to_num(r, nan=0.0)
+                    else:
+                        r = 0
+                    if p + r != 0:
+                        f1 = 2 * (p * r) / (p + r)
+                        f1 = np.nan_to_num(f1, nan=0.0)
+                    else:
+                        f1 = 0
 
                     p_class_list.append(p)
                     r_class_list.append(r)
@@ -870,11 +889,20 @@ class EvaluationPanel(foo.Panel):
 
                     conf = sum(conf_total) / len(conf_total)
 
-                    p = tp / (tp + fp)
+                    if tp + fp != 0:
+                        p = tp / (tp + fp)
+                    else:
+                        p = 0
                     p = np.nan_to_num(p, nan=0.0)
-                    r = tp / (tp + fn)
+                    if tp + fn != 0:
+                        r = tp / (tp + fn)
+                    else:
+                        r = 0
                     r = np.nan_to_num(r, nan=0.0)
-                    f1 = 2 * (p * r) / (p + r)
+                    if p+r !=0:
+                        f1 = 2 * (p * r) / (p + r)
+                    else:
+                        f1 = 0
                     f1 = np.nan_to_num(f1, nan=0.0)
 
                     p_class_list.append(p)
@@ -1064,19 +1092,37 @@ class EvaluationPanel(foo.Panel):
                 c_fp = np.array(ctx.dataset.values(f"{compare_key}_fp"))
                 c_fn = np.array(ctx.dataset.values(f"{compare_key}_fn"))
 
-                p = tp / (tp + fp)
+                n = tp.astype(np.float64)
+                d = (tp+fp).astype(np.float64)
+                p = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
                 p = np.nan_to_num(p, nan=0.0)
-                r = tp / (tp + fn)
+
+
+                n = tp.astype(np.float64)
+                d = (tp+fn).astype(np.float64)
+                r = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
                 r = np.nan_to_num(r, nan=0.0)
-                f1 = 2 * (p * r) / (p + r)
+
+                n = (2 * (p * r)).astype(np.float64)
+                d = (p+r).astype(np.float64)
+                f1 = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
                 f1 = np.nan_to_num(f1, nan=0.0)
 
-                c_p = c_tp / (c_tp + c_fp)
+                n = c_tp.astype(np.float64)
+                d = (c_tp+c_fp).astype(np.float64)
+                c_p = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
                 c_p = np.nan_to_num(c_p, nan=0.0)
-                c_r = c_tp / (c_tp + c_fn)
-                c_r = np.nan_to_num(c_r, nan=0.0)
-                c_f1 = 2 * (c_p * c_r) / (c_p + c_r)
-                c_f1 = np.nan_to_num(c_f1, nan=0.0)
+
+
+                n = c_tp.astype(np.float64)
+                d = (c_tp+c_fn).astype(np.float64)
+                c_r = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
+                c_r = np.nan_to_num(r, nan=0.0)
+
+                n = (2 * (c_p * c_r)).astype(np.float64)
+                d = (c_p+c_r).astype(np.float64)
+                c_f1 = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
+                c_f1 = np.nan_to_num(f1, nan=0.0)
 
                 p_left_edges, p_counts, p_widths = compute_histogram(p, 10)
                 c_p_left_edges, c_p_counts, c_p_widths = compute_histogram(c_p, 10)
@@ -1196,12 +1242,23 @@ class EvaluationPanel(foo.Panel):
 
                     conf = sum(conf_total) / len(conf_total)
 
-                    p = tp / (tp + fp)
-                    p = np.nan_to_num(p, nan=0.0)
-                    r = tp / (tp + fn)
-                    r = np.nan_to_num(r, nan=0.0)
-                    f1 = 2 * (p * r) / (p + r)
-                    f1 = np.nan_to_num(f1, nan=0.0)
+                    
+                    
+                    if tp + fp != 0:
+                        p = tp / (tp + fp)
+                        p = np.nan_to_num(p, nan=0.0)
+                    else:
+                        p = 0
+                    if tp + fn != 0:
+                        r = tp / (tp + fn)
+                        r = np.nan_to_num(r, nan=0.0)
+                    else:
+                        r = 0
+                    if p + r != 0:
+                        f1 = 2 * (p * r) / (p + r)
+                        f1 = np.nan_to_num(f1, nan=0.0)
+                    else:
+                        f1 = 0
 
                     p_class_list.append(p)
                     r_class_list.append(r)
@@ -1243,12 +1300,22 @@ class EvaluationPanel(foo.Panel):
 
                         c_conf = sum(c_conf_total) / len(c_conf_total)
 
-                        c_p = c_tp / (c_tp + c_fp)
-                        c_p = np.nan_to_num(c_p, nan=0.0)
-                        c_r = c_tp / (c_tp + c_fn)
-                        c_r = np.nan_to_num(c_r, nan=0.0)
-                        c_f1 = 2 * (c_p * c_r) / (c_p + c_r)
-                        c_f1 = np.nan_to_num(c_f1, nan=0.0)
+                        if c_tp + c_fp != 0:
+                            c_p = c_tp / (c_tp + c_fp)
+                            c_p = np.nan_to_num(c_p, nan=0.0)
+                        else:
+                            c_p = 0
+                        if c_tp + c_fn != 0:
+                            c_r = c_tp / (c_tp + c_fn)
+                            c_r = np.nan_to_num(c_r, nan=0.0)
+                        else:
+                            c_r = 0
+                        if c_p + c_r != 0:
+                            c_f1 = 2 * (c_p * c_r) / (c_p + c_r)
+                            c_f1 = np.nan_to_num(c_f1, nan=0.0)
+                        else:
+                            c_f1 = 0
+
 
                         c_p_class_list.append(c_p)
                         c_r_class_list.append(c_r)
@@ -1461,11 +1528,20 @@ class EvaluationPanel(foo.Panel):
 
                     conf = sum(conf_total) / len(conf_total)
 
-                    p = tp / (tp + fp)
+                    if tp + fp != 0:
+                        p = tp / (tp + fp)
+                    else:
+                        p = 0
                     p = np.nan_to_num(p, nan=0.0)
-                    r = tp / (tp + fn)
+                    if tp + fn != 0:
+                        r = tp / (tp + fn)
+                    else:
+                        r = 0
                     r = np.nan_to_num(r, nan=0.0)
-                    f1 = 2 * (p * r) / (p + r)
+                    if p+r !=0:
+                        f1 = 2 * (p * r) / (p + r)
+                    else:
+                        f1 = 0
                     f1 = np.nan_to_num(f1, nan=0.0)
 
                     p_class_list.append(p)
