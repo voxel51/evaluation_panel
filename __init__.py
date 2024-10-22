@@ -1,14 +1,7 @@
-import fiftyone as fo
-import fiftyone.brain as fob
-import fiftyone.core.fields as fof
-import fiftyone.core.labels as fol
-import fiftyone.core.patches as fop
 import fiftyone.operators as foo
 import fiftyone.operators.types as types
-import fiftyone.zoo.models as fozm
 import numpy as np
 from fiftyone import ViewField as F
-from fiftyone.brain import Similarity
 
 
 class EvaluationPanel(foo.Panel):
@@ -367,7 +360,7 @@ class EvaluationPanel(foo.Panel):
                     new_row = {"class": "All", "AP": int(results.mAP() * 1000) / 1000}
                     mAP_list.append(new_row)
                     ctx.panel.set_data("my_stack.mAP_evaluations", mAP_list)
-        
+
         # Compare key DOES exist, update c_(table_name) instead
         else:
             c_eval = ctx.dataset.get_evaluation_info(compare_key).serialize()
@@ -512,9 +505,9 @@ class EvaluationPanel(foo.Panel):
         ctx,
     ):
         # _update_plot_data is called in on_change_config
-        # The function updates the DATA of all the plots in the panel, 
+        # The function updates the DATA of all the plots in the panel,
         # including histograms and confusion matrices# _update_plot_data is called in on_change_config
-        # The function updates the DATA of all the plots in the panel, 
+        # The function updates the DATA of all the plots in the panel,
         # including histograms and confusion matrices
 
         # Grab the basic info
@@ -629,25 +622,24 @@ class EvaluationPanel(foo.Panel):
                     ],
                 )
 
-                #Calculate recall, precision, and f1. Dont forget to check for divide by 0!
+                # Calculate recall, precision, and f1. Dont forget to check for divide by 0!
                 tp = np.array(ctx.dataset.values(f"{eval_key}_tp"))
                 fp = np.array(ctx.dataset.values(f"{eval_key}_fp"))
                 fn = np.array(ctx.dataset.values(f"{eval_key}_fn"))
 
                 n = tp.astype(np.float64)
-                d = (tp+fp).astype(np.float64)
-                p = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
+                d = (tp + fp).astype(np.float64)
+                p = np.divide(n, d, out=np.full_like(n, np.nan), where=d != 0)
                 p = np.nan_to_num(p, nan=0.0)
 
-
                 n = tp.astype(np.float64)
-                d = (tp+fn).astype(np.float64)
-                r = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
+                d = (tp + fn).astype(np.float64)
+                r = np.divide(n, d, out=np.full_like(n, np.nan), where=d != 0)
                 r = np.nan_to_num(r, nan=0.0)
 
                 n = (2 * (p * r)).astype(np.float64)
-                d = (p+r).astype(np.float64)
-                f1 = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
+                d = (p + r).astype(np.float64)
+                f1 = np.divide(n, d, out=np.full_like(n, np.nan), where=d != 0)
                 f1 = np.nan_to_num(f1, nan=0.0)
 
                 p_left_edges, p_counts, p_widths = compute_histogram(p, 10)
@@ -736,7 +728,6 @@ class EvaluationPanel(foo.Panel):
 
                     conf = sum(conf_total) / len(conf_total)
 
-                    
                     if tp + fp != 0:
                         p = tp / (tp + fp)
                         p = np.nan_to_num(p, nan=0.0)
@@ -899,7 +890,7 @@ class EvaluationPanel(foo.Panel):
                     else:
                         r = 0
                     r = np.nan_to_num(r, nan=0.0)
-                    if p+r !=0:
+                    if p + r != 0:
                         f1 = 2 * (p * r) / (p + r)
                     else:
                         f1 = 0
@@ -1093,35 +1084,33 @@ class EvaluationPanel(foo.Panel):
                 c_fn = np.array(ctx.dataset.values(f"{compare_key}_fn"))
 
                 n = tp.astype(np.float64)
-                d = (tp+fp).astype(np.float64)
-                p = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
+                d = (tp + fp).astype(np.float64)
+                p = np.divide(n, d, out=np.full_like(n, np.nan), where=d != 0)
                 p = np.nan_to_num(p, nan=0.0)
 
-
                 n = tp.astype(np.float64)
-                d = (tp+fn).astype(np.float64)
-                r = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
+                d = (tp + fn).astype(np.float64)
+                r = np.divide(n, d, out=np.full_like(n, np.nan), where=d != 0)
                 r = np.nan_to_num(r, nan=0.0)
 
                 n = (2 * (p * r)).astype(np.float64)
-                d = (p+r).astype(np.float64)
-                f1 = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
+                d = (p + r).astype(np.float64)
+                f1 = np.divide(n, d, out=np.full_like(n, np.nan), where=d != 0)
                 f1 = np.nan_to_num(f1, nan=0.0)
 
                 n = c_tp.astype(np.float64)
-                d = (c_tp+c_fp).astype(np.float64)
-                c_p = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
+                d = (c_tp + c_fp).astype(np.float64)
+                c_p = np.divide(n, d, out=np.full_like(n, np.nan), where=d != 0)
                 c_p = np.nan_to_num(c_p, nan=0.0)
 
-
                 n = c_tp.astype(np.float64)
-                d = (c_tp+c_fn).astype(np.float64)
-                c_r = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
+                d = (c_tp + c_fn).astype(np.float64)
+                c_r = np.divide(n, d, out=np.full_like(n, np.nan), where=d != 0)
                 c_r = np.nan_to_num(r, nan=0.0)
 
                 n = (2 * (c_p * c_r)).astype(np.float64)
-                d = (c_p+c_r).astype(np.float64)
-                c_f1 = np.divide(n, d, out=np.full_like(n, np.nan), where=d!= 0)
+                d = (c_p + c_r).astype(np.float64)
+                c_f1 = np.divide(n, d, out=np.full_like(n, np.nan), where=d != 0)
                 c_f1 = np.nan_to_num(f1, nan=0.0)
 
                 p_left_edges, p_counts, p_widths = compute_histogram(p, 10)
@@ -1242,8 +1231,6 @@ class EvaluationPanel(foo.Panel):
 
                     conf = sum(conf_total) / len(conf_total)
 
-                    
-                    
                     if tp + fp != 0:
                         p = tp / (tp + fp)
                         p = np.nan_to_num(p, nan=0.0)
@@ -1315,7 +1302,6 @@ class EvaluationPanel(foo.Panel):
                             c_f1 = np.nan_to_num(c_f1, nan=0.0)
                         else:
                             c_f1 = 0
-
 
                         c_p_class_list.append(c_p)
                         c_r_class_list.append(c_r)
@@ -1538,7 +1524,7 @@ class EvaluationPanel(foo.Panel):
                     else:
                         r = 0
                     r = np.nan_to_num(r, nan=0.0)
-                    if p+r !=0:
+                    if p + r != 0:
                         f1 = 2 * (p * r) / (p + r)
                     else:
                         f1 = 0
@@ -1720,7 +1706,6 @@ class EvaluationPanel(foo.Panel):
         # Start the ones that always appear regardless of model type and follow by eval_type
         # specific ones afterwards
 
-
         # Start by grabbing some basics
         eval_key = ctx.panel.get_state("my_stack.menu.actions.eval_key")
         compare_key = ctx.panel.get_state("my_stack.menu.actions.compare_key", None)
@@ -1744,7 +1729,7 @@ class EvaluationPanel(foo.Panel):
 
         # After the plot layout/config is defined, add the property to the stack with the
         # appropriate on_call and on_selected calls
-        #TODO add on_selected
+        # TODO add on_selected
         stack.add_property(
             "confidence",
             types.Property(

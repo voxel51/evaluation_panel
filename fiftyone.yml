@@ -1,8 +1,7 @@
-name: "@danielgural/evaluation_panel"
+name: "@voxel51/evaluation_panel"
 description: Model Evaluation Panel
 version: 1.0.0
 fiftyone:
- version: "*"
-operators:
+ version: "^0.25.0"
+panels:
  - evaluation_panel
- - eval_plots
